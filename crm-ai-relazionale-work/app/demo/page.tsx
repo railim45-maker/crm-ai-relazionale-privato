@@ -12,6 +12,7 @@ type Channel = 'Email' | 'Telefono' | 'WhatsApp' | 'LinkedIn' | 'Video' | 'Nota 
 type MailingPriorityFilter = 'Tutte' | PriorityLevel
 type MailingStageFilter = 'Tutti' | OutreachStage
 type MailingSeparator = 'virgola' | 'punto e virgola'
+type CommunicationTemplate = 'opener' | 'diagnose' | 'qualify' | 'position' | 'close'
 
 type Contact = {
   id: string
@@ -149,6 +150,7 @@ const milanoBatch1: SeedLead[] = [
 function profileStorageKey(profileId: string) { return `${LEGACY_STORAGE_KEY}:${profileId}` }
 function nowIso() { return new Date().toISOString() }
 function today() { return new Date().toISOString().slice(0, 10) }
+function addDays(days: number) { const date = new Date(); date.setDate(date.getDate() + days); return date.toISOString().slice(0, 10) }
 function id(prefix: string) { return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` }
 function euro(value: number) { return new Intl.NumberFormat('it-IT', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(value || 0) }
 function fmtDate(value: string) { if (!value) return 'Non impostata'; const d = new Date(value); return Number.isNaN(d.getTime()) ? value : new Intl.DateTimeFormat('it-IT').format(d) }
@@ -225,6 +227,8 @@ export default function DemoAppPage() {
   const [mailingStage, setMailingStage] = useState<MailingStageFilter>('Tutti')
   const [mailingSeparator, setMailingSeparator] = useState<MailingSeparator>('punto e virgola')
   const [mailingCopied, setMailingCopied] = useState(false)
+  const [assistedTemplate, setAssistedTemplate] = useState<CommunicationTemplate>('opener')
+  const [assistedFeedback, setAssistedFeedback] = useState('')
 
   function loadProfileData(profileId: string, useLegacyFallback = false) {
     try {
@@ -441,6 +445,139 @@ export default function DemoAppPage() {
     }).catch(() => window.alert('Non sono riuscito a copiare automaticamente. Seleziona il testo e copialo manualmente.'))
   }
 
+
+  function closerStepLabel(step: CommunicationTemplate) {
+    return ({ opener: 'Apertura delicata', diagnose: 'Domande strategiche', qualify: 'Qualificazione bisogno', position: 'Soluzione soft', close: 'Call o demo' })[step]
+  }
+
+  function contactDisplayName(contact: Contact) { return (contact.decisionMakerName || contact.name).trim() }
+  function contactBusinessName(contact: Contact) { return (contact.company || contact.name).trim() }
+  function cleanPhoneForWhatsApp(phone: string) { return phone.replace(/[^0-9]/g, '') }
+
+  function strategicQuestions(contact: Contact): string[] {
+    const business = contactBusinessName(contact)
+    const category = (contact.category || contact.role || 'attività').toLowerCase()
+    return [
+      `Qual è oggi la richiesta ripetitiva che fa perdere più tempo a ${business}?`,
+      `Le capita di perdere contatti perché arrivano fuori orario, nei momenti pieni o su canali diversi?`,
+      `Quanto pesa per una ${category} rispondere sempre bene a domande su disponibilità, prezzi, servizi e prenotazioni?`,
+      `Se una parte del primo contatto fosse già ordinata e filtrata, quale problema operativo risolverebbe per primo?`,
+    ]
+  }
+
+  function conversationObjective(step: CommunicationTemplate) {
+    return ({
+      opener: 'Aprire la conversazione senza vendere subito, usando un dettaglio specifico del lead.',
+      diagnose: 'Far emergere problemi, colli di bottiglia e richieste ripetitive tramite domande mirate.',
+      qualify: 'Capire frequenza, urgenza, valore economico e disponibilità a migliorare il processo.',
+      position: 'Collegare il problema emerso a Voice Desk o alla soluzione del progetto attivo in modo naturale.',
+      close: 'Portare il lead a una call, demo o prova breve con un passo semplice e non pressante.',
+    })[step]
+  }
+
+  function buildEmailTemplate(contact: Contact): { subject: string; body: string } {
+    const person = contactDisplayName(contact)
+    const business = contactBusinessName(contact)
+    const city = contact.city || 'la sua zona'
+    const hook = contact.personalizationHook || `il modo in cui ${business} si presenta ai clienti`
+    const angle = contact.messageAngle || 'gestire meglio richieste e primi contatti senza automatismi invasivi'
+    const category = (contact.category || contact.role || 'attività').toLowerCase()
+    const questions = strategicQuestions(contact)
+
+    if (assistedTemplate === 'diagnose') return {
+      subject: `Una domanda pratica su ${business}`,
+      body: `Buongiorno ${person},\n\nle faccio una domanda molto concreta, prima ancora di parlarle di soluzioni.\n\nHo notato ${hook}. In una ${category} come ${business}, capita spesso che molte energie vadano in risposte ripetitive: disponibilità, prezzi, servizi, orari, prenotazioni o prime richieste non ancora qualificate.\n\n${questions.slice(0, 3).map((q) => `- ${q}`).join('\n')}\n\nSe mi risponde anche solo a una di queste domande, riesco a capire se ha senso prepararle un esempio utile oppure se non è il momento.\n\nResto a disposizione,\nVoice Desk`
+    }
+
+    if (assistedTemplate === 'qualify') return {
+      subject: `Capire se può essere utile per ${business}`,
+      body: `Buongiorno ${person},\n\nper capire se l'idea può avere senso per ${business}, le chiederei solo tre cose rapide.\n\n1. Quante richieste simili ricevete in una settimana tra telefono, email, sito e WhatsApp?\n2. Quali richieste richiedono sempre le stesse risposte o fanno perdere più tempo allo staff?\n3. Se potesse migliorare un solo punto del primo contatto con il cliente, quale sceglierebbe?\n\nLa mia idea è valutare se Voice Desk possa aiutarvi a ${angle}, senza togliere il controllo umano e senza automatizzare ciò che deve restare personale.\n\nSe vuole, sulla base delle sue risposte preparo un esempio pratico.\n\nResto a disposizione,\nVoice Desk`
+    }
+
+    if (assistedTemplate === 'position') return {
+      subject: `Esempio concreto per ${business}`,
+      body: `Buongiorno ${person},\n\npartendo da quanto emerge per ${business}, il punto non è “mettere un robot” davanti ai clienti. Il punto è ordinare il primo contatto, filtrare le richieste ripetitive e aiutare lo staff ad arrivare più preparato alla risposta.\n\nPer una ${category} a ${city}, Voice Desk può essere impostato per rispondere in modo coerente a domande frequenti, raccogliere informazioni utili e indirizzare solo le richieste importanti alla persona giusta.\n\nIn pratica: meno dispersione, più continuità, e controllo sempre vostro.\n\nSe vuole, posso prepararle una mini-demo testuale su un caso tipico di ${business}.\n\nResto a disposizione,\nVoice Desk`
+    }
+
+    if (assistedTemplate === 'close') return {
+      subject: `Mini-demo per ${business}`,
+      body: `Buongiorno ${person},\n\nse per lei ha senso, il passo più semplice non è una riunione lunga: preparo una mini-demo concreta su ${business}, basata su 2 o 3 richieste reali che ricevete spesso.\n\nIn questo modo può valutare subito se Voice Desk può aiutarvi a ${angle}. Se non vede valore, ci fermiamo lì senza impegno.\n\nLe andrebbe bene sentirci 10 minuti oppure preferisce che le mandi prima un esempio scritto?\n\nResto a disposizione,\nVoice Desk`
+    }
+
+    return {
+      subject: `Idea pratica per ${business}`,
+      body: `Buongiorno ${person},\n\nle scrivo perché ho notato ${hook}.\n\nPer una ${category} come ${business}${city ? ` a ${city}` : ''}, spesso il primo contatto con clienti e potenziali clienti si disperde tra telefonate, messaggi, email e richieste ripetitive.\n\nPrima di proporle qualcosa, vorrei capire se questo tema è reale anche per voi: qual è oggi la richiesta che vi fa perdere più tempo o che rischia di restare senza risposta nel momento giusto?\n\nSe ha senso, posso prepararle un esempio molto breve e concreto sul caso di ${business}.\n\nResto a disposizione,\nVoice Desk`
+    }
+  }
+
+  function buildWhatsAppTemplate(contact: Contact): string {
+    const person = contactDisplayName(contact)
+    const business = contactBusinessName(contact)
+    const hook = contact.personalizationHook || `il modo in cui ${business} accoglie i clienti`
+    const angle = contact.messageAngle || 'gestire meglio richieste e primi contatti senza automatismi invasivi'
+    const questions = strategicQuestions(contact)
+
+    if (assistedTemplate === 'diagnose') return `Buongiorno ${person}, sono di Voice Desk. Prima di proporle qualcosa, le faccio una domanda pratica: ${questions[0]} Le capita anche di perdere richieste quando arrivano fuori orario o su canali diversi?`
+    if (assistedTemplate === 'qualify') return `Buongiorno ${person}, per capire se può essere utile a ${business}: quali richieste ripetitive ricevete più spesso e quanto tempo portano via allo staff ogni settimana?`
+    if (assistedTemplate === 'position') return `Buongiorno ${person}, da quello che vedo per ${business}, Voice Desk potrebbe aiutare a ${angle}: non sostituisce lo staff, ma ordina il primo contatto e filtra le richieste ripetitive. Vuole che le prepari un esempio concreto?`
+    if (assistedTemplate === 'close') return `Buongiorno ${person}, se ha senso facciamo il passo più semplice: mini-demo di 10 minuti o esempio scritto su ${business}. Così valuta subito se è utile, senza impegno. Cosa preferisce?`
+    return `Buongiorno ${person}, sono di Voice Desk. Ho notato ${hook}. Le faccio solo una domanda: per ${business}, qual è oggi la richiesta dei clienti che fa perdere più tempo o rischia di non ricevere risposta nel momento giusto?`
+  }
+
+  function setTemporaryAssistedFeedback(message: string) {
+    setAssistedFeedback(message)
+    setTimeout(() => setAssistedFeedback(''), 2400)
+  }
+
+  function copyAssistedMessage(kind: 'email' | 'whatsapp') {
+    if (!selectedContact) return
+    const text = kind === 'email' ? `${buildEmailTemplate(selectedContact).subject}\n\n${buildEmailTemplate(selectedContact).body}` : buildWhatsAppTemplate(selectedContact)
+    navigator.clipboard.writeText(text).then(() => setTemporaryAssistedFeedback(kind === 'email' ? 'Email copiata' : 'WhatsApp copiato')).catch(() => window.alert('Non sono riuscito a copiare automaticamente. Seleziona il testo e copialo manualmente.'))
+  }
+
+  function openMailto(contact: Contact) {
+    const email = contactEmail(contact)
+    const template = buildEmailTemplate(contact)
+    const url = `mailto:${email ? encodeURIComponent(email) : ''}?subject=${encodeURIComponent(template.subject)}&body=${encodeURIComponent(template.body)}`
+    window.location.href = url
+    setTemporaryAssistedFeedback(email ? 'Email aperta' : 'Bozza email pronta')
+  }
+
+  function openWhatsApp(contact: Contact) {
+    const phone = cleanPhoneForWhatsApp(contact.phone)
+    const message = buildWhatsAppTemplate(contact)
+    if (!phone) { copyAssistedMessage('whatsapp'); window.alert('Questo contatto non ha un telefono salvato: ho copiato il messaggio WhatsApp negli appunti.'); return }
+    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer')
+    setTemporaryAssistedFeedback('WhatsApp aperto')
+  }
+
+  function stageAfterAssistedMessage(): OutreachStage {
+    if (assistedTemplate === 'close') return 'Demo richiesta'
+    if (assistedTemplate === 'diagnose' || assistedTemplate === 'qualify' || assistedTemplate === 'position') return 'Follow-up 1'
+    return 'Primo invio'
+  }
+
+  function markContacted(contactId: string, channel: Channel = 'Email') {
+    const contact = contacts.find((item) => item.id === contactId)
+    if (!contact) return
+    const text = channel === 'WhatsApp' ? buildWhatsAppTemplate(contact) : buildEmailTemplate(contact).body
+    const nextStage = stageAfterAssistedMessage()
+    const result = analyzeConversation(text, contact)
+    setConversations((current) => [{ id: id('conversation'), contactId, text, channel, stage: nextStage, analysis: result, createdAt: nowIso() }, ...current])
+    setContacts((current) => current.map((c) => c.id === contactId ? { ...c, lastContact: today(), outreachStage: nextStage, nextAction: `${closerStepLabel(assistedTemplate)} inviato: attendere risposta e preparare la prossima domanda.`, updatedAt: nowIso() } : c))
+    setAnalysis(result)
+    setTemporaryAssistedFeedback('Contatto aggiornato')
+  }
+
+  function scheduleFollowUp(contactId: string, days = 3) {
+    const contact = contacts.find((item) => item.id === contactId)
+    if (!contact) return
+    const due = addDays(days)
+    setTasks((current) => [{ id: id('task'), title: `Follow-up ${contact.name}: ${closerStepLabel(assistedTemplate)} / prossima domanda`, contactId, priority: contact.priorityLevel === 'A' ? 'Alta' : 'Media', due, completed: false, createdAt: nowIso() }, ...current])
+    setContacts((current) => current.map((c) => c.id === contactId ? { ...c, outreachStage: 'Follow-up 1', nextAction: `Follow-up programmato per ${fmtDate(due)}: proseguire con ${closerStepLabel(assistedTemplate).toLowerCase()}.`, updatedAt: nowIso() } : c))
+    setTemporaryAssistedFeedback(`Follow-up ${fmtDate(due)}`)
+  }
+
   function askAgent(prompt?: string) { const q = prompt || question; setQuestion(q); setAnswer(agentAnswer(q, contacts, tasks, conversations)) }
   function switchProfile(profileId: string) { setActiveProfileId(profileId); window.localStorage.setItem(ACTIVE_PROFILE_KEY, profileId); loadProfileData(profileId); resetDraft(); setAnalysis(null); setAnswer('Profilo cambiato. Sto usando solo i dati locali di questo profilo.') }
   function createProfile() { const name = newProfileName.trim(); if (!name) return; const timestamp = nowIso(); const newProfile = { id: id('profilo'), name, createdAt: timestamp, updatedAt: timestamp }; setProfiles((current) => [...current, newProfile]); setNewProfileName(''); setActiveProfileId(newProfile.id); window.localStorage.setItem(ACTIVE_PROFILE_KEY, newProfile.id); setContacts([]); setTasks([]); setConversations([]); setSelectedContactId(''); resetDraft(); setAnalysis(null); setAnswer(`Profilo ${name} creato. I dati saranno separati dagli altri profili locali.`) }
@@ -463,7 +600,7 @@ export default function DemoAppPage() {
 
   {section === 'pipeline' && <div className="space-y-5"><div className="rounded-3xl bg-white border p-5"><h2 className="font-bold text-lg">Flusso comunicazioni</h2><p className="text-gray-600 mt-1">Sposta ogni contatto nello stadio reale. Per ora l’invio resta manuale: il CRM ti aiuta a non perdere prossima azione e storico.</p></div><div className="grid md:grid-cols-2 xl:grid-cols-4 gap-4">{stageGroups.map(({ stage, items }) => <div key={stage} className="rounded-3xl bg-white border p-4"><div className="flex justify-between items-center mb-3"><h3 className="font-semibold">{stage}</h3><span className="text-xs rounded-full bg-stone-100 px-2 py-1">{items.length}</span></div><div className="space-y-3">{items.map((contact) => <button key={contact.id} onClick={() => { setSelectedContactId(contact.id); setSection('contacts') }} className="w-full text-left rounded-2xl border p-3 hover:bg-stone-50"><div className="font-semibold text-sm">{contact.name}</div><div className="text-xs text-gray-500">Priorità {contact.priorityLevel || 'B'} · {contact.category || 'Categoria n/d'}</div><div className="text-xs text-gray-600 mt-2 line-clamp-2">{contact.nextAction || contact.messageAngle || 'Prossima azione da definire'}</div></button>)}{items.length === 0 && <p className="text-sm text-gray-400">Nessun contatto.</p>}</div></div>)}</div></div>}
 
-  {section === 'conversations' && <div className="grid lg:grid-cols-2 gap-6"><div className="rounded-3xl bg-white border p-5"><h2 className="font-bold text-lg mb-4">Registra comunicazione</h2><select value={selectedContact?.id || ''} onChange={(e) => setSelectedContactId(e.target.value)} className="w-full rounded-2xl border px-4 py-3 mb-4 bg-white"><option value="">Seleziona contatto</option>{contacts.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select><div className="grid grid-cols-2 gap-3 mb-4"><select value={communicationChannel} onChange={(e) => setCommunicationChannel(e.target.value as Channel)} className="rounded-2xl border px-4 py-3 bg-white">{channels.map((c) => <option key={c}>{c}</option>)}</select><select value={communicationStage} onChange={(e) => setCommunicationStage(e.target.value as OutreachStage)} className="rounded-2xl border px-4 py-3 bg-white">{outreachStages.map((s) => <option key={s}>{s}</option>)}</select></div>{selectedContact && <div className="rounded-2xl bg-blue-50 border border-blue-100 p-4 text-sm text-blue-900 mb-4"><strong>Gancio:</strong> {selectedContact.personalizationHook || 'gancio non compilato'}<br /><strong>Angolo:</strong> {selectedContact.messageAngle || 'angolo messaggio non compilato'}</div>}<textarea value={conversation} onChange={(e) => setConversation(e.target.value)} className="w-full min-h-52 rounded-2xl border p-4" placeholder="Incolla email inviata, nota telefonata, risposta ricevuta, script video o appunto operativo..." /><button onClick={runAnalysis} disabled={!selectedContact || !conversation.trim()} className="mt-4 w-full rounded-2xl bg-gray-900 text-white py-3 font-semibold hover:bg-gray-800 disabled:opacity-40"><Upload className="w-4 h-4 inline mr-2" />Salva, aggiorna stadio e genera follow-up</button></div><div className="rounded-3xl bg-white border p-5"><h2 className="font-bold text-lg mb-4">Ultima analisi</h2>{analysis ? <div className="space-y-4"><div className="rounded-2xl bg-blue-50 p-4"><div className="text-sm text-blue-700">Score opportunità</div><div className="text-3xl font-bold text-blue-900">{analysis.score}/100</div></div><div><div className="text-sm text-gray-500">Sintesi</div><p className="font-medium">{analysis.summary}</p></div><div><div className="text-sm text-gray-500 mb-2">Bisogni / attenzioni</div>{analysis.needs.map((n) => <div key={n} className="rounded-xl border px-3 py-2 mb-2">{n}</div>)}</div><div className="rounded-2xl bg-green-50 p-4 text-green-800"><strong>Prossima azione:</strong> {analysis.action}</div></div> : <p className="text-gray-500">Registra una comunicazione reale per creare storico, task e prossimo passo.</p>}</div><div className="rounded-3xl bg-white border p-5 lg:col-span-2"><h2 className="font-bold text-lg mb-4">Storico comunicazioni</h2><div className="grid md:grid-cols-2 gap-3">{conversations.map((item) => { const c = contacts.find((x) => x.id === item.contactId); return <div key={item.id} className="rounded-2xl border p-4"><div className="flex justify-between gap-3"><div className="font-semibold">{c?.name || 'Contatto eliminato'}</div><div className="text-xs text-gray-500">{fmtDate(item.createdAt)}</div></div><div className="text-xs text-gray-500 mt-1">{item.channel || 'Nota'} · {item.stage || 'Stadio non indicato'}</div><div className="mt-2 text-sm text-gray-600 max-h-24 overflow-hidden">{item.text}</div><div className="mt-3 rounded-xl bg-stone-50 p-3 text-sm"><strong>{item.analysis.score}/100 · {item.analysis.topic}</strong><br />{item.analysis.summary}</div></div> })}</div>{conversations.length === 0 && <p className="text-gray-500">Ancora nessuna comunicazione salvata.</p>}</div></div>}
+  {section === 'conversations' && <div className="space-y-6"><div className="grid lg:grid-cols-2 gap-6"><div className="rounded-3xl bg-white border p-5"><h2 className="font-bold text-lg mb-4">Registra comunicazione</h2><select value={selectedContact?.id || ''} onChange={(e) => setSelectedContactId(e.target.value)} className="w-full rounded-2xl border px-4 py-3 mb-4 bg-white"><option value="">Seleziona contatto</option>{contacts.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select><div className="grid grid-cols-2 gap-3 mb-4"><select value={communicationChannel} onChange={(e) => setCommunicationChannel(e.target.value as Channel)} className="rounded-2xl border px-4 py-3 bg-white">{channels.map((c) => <option key={c}>{c}</option>)}</select><select value={communicationStage} onChange={(e) => setCommunicationStage(e.target.value as OutreachStage)} className="rounded-2xl border px-4 py-3 bg-white">{outreachStages.map((s) => <option key={s}>{s}</option>)}</select></div>{selectedContact && <div className="rounded-2xl bg-blue-50 border border-blue-100 p-4 text-sm text-blue-900 mb-4"><strong>Gancio:</strong> {selectedContact.personalizationHook || 'gancio non compilato'}<br /><strong>Angolo:</strong> {selectedContact.messageAngle || 'angolo messaggio non compilato'}</div>}<textarea value={conversation} onChange={(e) => setConversation(e.target.value)} className="w-full min-h-52 rounded-2xl border p-4" placeholder="Incolla email inviata, nota telefonata, risposta ricevuta, script video o appunto operativo..." /><button onClick={runAnalysis} disabled={!selectedContact || !conversation.trim()} className="mt-4 w-full rounded-2xl bg-gray-900 text-white py-3 font-semibold hover:bg-gray-800 disabled:opacity-40"><Upload className="w-4 h-4 inline mr-2" />Salva, aggiorna stadio e genera follow-up</button></div><div className="rounded-3xl bg-white border p-5"><div className="flex items-center justify-between gap-3 mb-4"><h2 className="font-bold text-lg">Comunicazioni assistite</h2>{assistedFeedback && <span className="text-xs rounded-full bg-green-50 text-green-700 px-3 py-1 border border-green-100">{assistedFeedback}</span>}</div><select value={selectedContact?.id || ''} onChange={(e) => setSelectedContactId(e.target.value)} className="w-full rounded-2xl border px-4 py-3 mb-3 bg-white"><option value="">Seleziona contatto</option>{contacts.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select><select value={assistedTemplate} onChange={(e) => setAssistedTemplate(e.target.value as CommunicationTemplate)} className="w-full rounded-2xl border px-4 py-3 mb-4 bg-white"><option value="opener">Apertura delicata</option><option value="diagnose">Domande strategiche</option><option value="qualify">Qualificazione bisogno</option><option value="position">Soluzione soft</option><option value="close">Call o demo</option></select>{selectedContact ? <div className="space-y-4"><div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-950"><div className="font-semibold mb-1">{selectedContact.name}</div><div>{selectedContact.category || selectedContact.role || 'Categoria non indicata'}{selectedContact.city ? ` · ${selectedContact.city}` : ''}</div><div className="mt-2"><strong>Gancio:</strong> {selectedContact.personalizationHook || 'da completare'}</div><div><strong>Angolo:</strong> {selectedContact.messageAngle || 'da completare'}</div></div><div className="rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm text-amber-950"><div className="font-semibold mb-2">Obiettivo closer: {closerStepLabel(assistedTemplate)}</div><p>{conversationObjective(assistedTemplate)}</p><div className="mt-3 font-semibold">Domande guida</div><ul className="list-disc pl-5 mt-1 space-y-1">{strategicQuestions(selectedContact).slice(0, 3).map((question) => <li key={question}>{question}</li>)}</ul></div><div className="rounded-2xl bg-stone-50 border p-4"><div className="text-xs font-semibold text-gray-500 mb-1">Oggetto email</div><div className="font-medium">{buildEmailTemplate(selectedContact).subject}</div><div className="text-xs font-semibold text-gray-500 mt-4 mb-1">Anteprima messaggio</div><pre className="whitespace-pre-wrap font-sans text-sm text-gray-700 max-h-52 overflow-auto">{assistedTemplate === 'opener' ? buildEmailTemplate(selectedContact).body : `${conversationObjective(assistedTemplate)}\n\n${buildEmailTemplate(selectedContact).body}`}</pre></div><div className="grid sm:grid-cols-2 gap-3"><button onClick={() => openMailto(selectedContact)} className="rounded-2xl bg-gray-900 text-white px-4 py-3 font-semibold hover:bg-gray-800"><Mail className="w-4 h-4 inline mr-2" />Prepara email</button><button onClick={() => openWhatsApp(selectedContact)} className="rounded-2xl bg-green-700 text-white px-4 py-3 font-semibold hover:bg-green-800"><Phone className="w-4 h-4 inline mr-2" />Prepara WhatsApp</button><button onClick={() => copyAssistedMessage('email')} className="rounded-2xl border bg-white px-4 py-3 font-semibold hover:bg-stone-50"><Copy className="w-4 h-4 inline mr-2" />Copia testo</button><button onClick={() => markContacted(selectedContact.id, 'Email')} className="rounded-2xl border bg-white px-4 py-3 font-semibold hover:bg-stone-50"><CheckSquare className="w-4 h-4 inline mr-2" />Segna contattato</button></div><button onClick={() => scheduleFollowUp(selectedContact.id, 3)} className="w-full rounded-2xl bg-blue-700 text-white px-4 py-3 font-semibold hover:bg-blue-800"><Plus className="w-4 h-4 inline mr-2" />Programma follow-up tra 3 giorni</button><p className="text-xs text-gray-500">Il CRM lavora come assistente closer: suggerisce la prossima domanda, apre email o WhatsApp con testo precompilato e salva lo storico, ma l'invio rimane sempre manuale e sotto il tuo controllo.</p></div> : <p className="text-gray-500">Seleziona un lead per generare email, WhatsApp e prossimi passi assistiti.</p>}</div><div className="rounded-3xl bg-white border p-5 lg:col-span-2"><h2 className="font-bold text-lg mb-4">Ultima analisi</h2>{analysis ? <div className="space-y-4"><div className="rounded-2xl bg-blue-50 p-4"><div className="text-sm text-blue-700">Score opportunità</div><div className="text-3xl font-bold text-blue-900">{analysis.score}/100</div></div><div><div className="text-sm text-gray-500">Sintesi</div><p className="font-medium">{analysis.summary}</p></div><div><div className="text-sm text-gray-500 mb-2">Bisogni / attenzioni</div>{analysis.needs.map((n) => <div key={n} className="rounded-xl border px-3 py-2 mb-2">{n}</div>)}</div><div className="rounded-2xl bg-green-50 p-4 text-green-800"><strong>Prossima azione:</strong> {analysis.action}</div></div> : <p className="text-gray-500">Registra una comunicazione reale oppure usa il modulo assistito per creare storico, task e prossimo passo.</p>}</div><div className="rounded-3xl bg-white border p-5 lg:col-span-2"><h2 className="font-bold text-lg mb-4">Storico comunicazioni</h2><div className="grid md:grid-cols-2 gap-3">{conversations.map((item) => { const c = contacts.find((x) => x.id === item.contactId); return <div key={item.id} className="rounded-2xl border p-4"><div className="flex justify-between gap-3"><div className="font-semibold">{c?.name || 'Contatto eliminato'}</div><div className="text-xs text-gray-500">{fmtDate(item.createdAt)}</div></div><div className="text-xs text-gray-500 mt-1">{item.channel || 'Nota'} · {item.stage || 'Stadio non indicato'}</div><div className="mt-2 text-sm text-gray-600 max-h-24 overflow-hidden">{item.text}</div><div className="mt-3 rounded-xl bg-stone-50 p-3 text-sm"><strong>{item.analysis.score}/100 · {item.analysis.topic}</strong><br />{item.analysis.summary}</div></div> })}</div>{conversations.length === 0 && <p className="text-gray-500">Ancora nessuna comunicazione salvata.</p>}</div></div></div>}
 
   {section === 'mailing' && <div className="space-y-5"><div className="rounded-3xl bg-white border p-5"><div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-5"><div><div className="flex items-center gap-3"><Mail className="w-6 h-6" /><h2 className="font-bold text-xl">Mailing list per CCN/BCC</h2></div><p className="text-sm text-gray-500 mt-2">Genera un elenco email pronto da copiare nel campo <strong>CCN</strong>. Il CRM non invia email: l’invio resta manuale e sotto il tuo controllo.</p></div><button onClick={copyMailingList} disabled={mailingEmails.length === 0} className="rounded-2xl bg-gray-900 text-white px-5 py-3 font-semibold disabled:opacity-40"><Copy className="w-4 h-4 inline mr-2" />{mailingCopied ? 'Copiato' : 'Copia elenco CCN'}</button></div><div className="grid md:grid-cols-4 gap-3 mb-5"><div><label className="text-xs font-semibold text-gray-500">Priorità</label><select value={mailingPriority} onChange={(e) => setMailingPriority(e.target.value as MailingPriorityFilter)} className="mt-1 w-full rounded-2xl border px-4 py-3 bg-white"><option value="Tutte">Tutte</option>{priorityLevels.map((p) => <option key={p} value={p}>Priorità {p}</option>)}</select></div><div><label className="text-xs font-semibold text-gray-500">Stadio comunicazione</label><select value={mailingStage} onChange={(e) => setMailingStage(e.target.value as MailingStageFilter)} className="mt-1 w-full rounded-2xl border px-4 py-3 bg-white"><option value="Tutti">Tutti</option>{outreachStages.map((s) => <option key={s} value={s}>{s}</option>)}</select></div><div><label className="text-xs font-semibold text-gray-500">Separatore</label><select value={mailingSeparator} onChange={(e) => setMailingSeparator(e.target.value as MailingSeparator)} className="mt-1 w-full rounded-2xl border px-4 py-3 bg-white"><option value="punto e virgola">Punto e virgola</option><option value="virgola">Virgola</option></select></div><div className="rounded-2xl bg-stone-50 p-4"><div className="text-xs text-gray-500">Email selezionate</div><div className="text-2xl font-bold">{mailingEmails.length}</div><div className="text-xs text-gray-500">Escluse senza email valida: {excludedEmailCount}</div></div></div><textarea readOnly value={mailingText || 'Nessuna email valida con i filtri attuali.'} className="w-full min-h-36 rounded-2xl border p-4 bg-stone-50 text-sm" /><div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><strong>Uso consigliato:</strong> incolla questo elenco nel campo CCN/BCC, non nel campo A. Per ridurre spam e blocchi, invia piccoli gruppi, personalizza il testo e registra poi la comunicazione nella sezione Comunicazioni.</div></div><div className="grid md:grid-cols-2 xl:grid-cols-3 gap-3">{mailingContacts.map((contact) => <div key={contact.id} className="rounded-2xl bg-white border p-4"><div className="flex items-start justify-between gap-3"><div><div className="font-semibold">{contact.name}</div><div className="text-sm text-gray-500">{contact.category || contact.role || 'Categoria non indicata'} · Priorità {contact.priorityLevel || 'B'}</div></div><span className="text-xs rounded-full bg-blue-50 text-blue-700 px-2 py-1">{contact.outreachStage || 'Da qualificare'}</span></div><div className="mt-3 text-sm font-medium text-gray-800 break-all">{contactEmail(contact)}</div><div className="mt-2 text-xs text-gray-500">{contact.personalizationHook || contact.messageAngle || 'Completa gancio e angolo prima dell’invio se vuoi una mail più efficace.'}</div></div>)}</div>{mailingContacts.length === 0 && <div className="rounded-3xl bg-white border p-6 text-gray-500">Nessun contatto con email valida nei filtri selezionati. Completa i campi email nel Database 100 oppure allarga i filtri.</div>}</div>}
   {section === 'agent' && <div className="rounded-3xl bg-white border p-5 max-w-4xl"><div className="flex items-center gap-3 mb-5"><Bot className="w-6 h-6" /><h2 className="font-bold text-xl">Agente operativo sui tuoi dati</h2></div><div className="rounded-2xl bg-stone-50 p-5 mb-4"><p>{answer}</p></div><div className="flex gap-3"><input value={question} onChange={(e) => setQuestion(e.target.value)} className="flex-1 rounded-2xl border px-4 py-3" placeholder="Es: chi devo contattare oggi? a che punto sono i 100 contatti?" /><button onClick={() => askAgent()} className="rounded-2xl bg-gray-900 text-white px-5 font-semibold"><Send className="w-4 h-4 inline mr-2" />Invia</button></div><div className="flex flex-wrap gap-2 mt-4">{['Chi devo contattare oggi?', 'A che punto sono i 100 contatti?', 'Quali lead sono caldi?', 'Mostrami i task aperti', 'Riassumi le conversazioni'].map((p) => <button key={p} onClick={() => askAgent(p)} className="rounded-xl border px-3 py-2 text-sm hover:bg-stone-50"><MessageSquareText className="w-3 h-3 inline mr-1" />{p}</button>)}</div><div className="mt-6 rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900"><Database className="w-4 h-4 inline mr-2" />In questa versione gratuita l’agente usa regole locali e solo i dati del profilo attivo. Per sincronizzazione tra dispositivi o invii automatici reali si potrà aggiungere un database cloud in seguito.</div></div>}
