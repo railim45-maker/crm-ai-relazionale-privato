@@ -2,6 +2,8 @@ import { redirect } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
 import Sidebar from '@/components/layout/Sidebar'
 
+export const dynamic = 'force-dynamic'
+
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createServerClient()
   const { data: { user } } = await supabase.auth.getUser()
