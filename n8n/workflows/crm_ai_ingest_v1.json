@@ -1,0 +1,157 @@
+{
+  "name": "CRM AI Relazionale - Ingest Conversazione V1",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "crm-ai-ingest-v1",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook_trigger",
+      "name": "Webhook - Input Canale",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body || $json;\nreturn [{\n  json: {\n    user_id: body.user_id,\n    contact_id: body.contact_id || null,\n    event_type: body.event_type || 'conversation_received',\n    source: body.source || 'manual_webhook',\n    channel: body.channel || 'unknown',\n    conversation_text: body.conversation_text || body.text || body.message || '',\n    payload: body,\n    received_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "normalize_payload",
+      "name": "Normalizza Payload CRM",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [260, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.CRM_BASE_URL}}/api/webhooks/ingest",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-crm-webhook-secret",
+              "value": "={{$env.CRM_WEBHOOK_SECRET}}"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{JSON.stringify($json)}}",
+        "options": {}
+      },
+      "id": "register_event",
+      "name": "Registra Evento CRM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [540, -120]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.conversation_text}}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "has_conversation_text",
+      "name": "Ha Testo Conversazione?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [540, 120]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.CRM_BASE_URL}}/api/conversations/analyze",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{JSON.stringify({ contact_id: $json.contact_id, content: $json.conversation_text, channel: $json.channel, source: $json.source })}}",
+        "options": {}
+      },
+      "id": "analyze_conversation",
+      "name": "Analizza Conversazione CRM AI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [820, 40]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{JSON.stringify({ ok: true, message: 'Evento ricevuto dal CRM AI Relazionale', event: $('Registra Evento CRM').item.json, analysis: $json })}}",
+        "options": {}
+      },
+      "id": "respond_success",
+      "name": "Risposta Operativa",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1100, 40]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{JSON.stringify({ ok: true, message: 'Evento registrato senza analisi conversazione', event: $('Registra Evento CRM').item.json })}}",
+        "options": {}
+      },
+      "id": "respond_no_analysis",
+      "name": "Risposta Senza Analisi",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [820, 260]
+    }
+  ],
+  "connections": {
+    "Webhook - Input Canale": {
+      "main": [[{"node": "Normalizza Payload CRM", "type": "main", "index": 0}]]
+    },
+    "Normalizza Payload CRM": {
+      "main": [
+        [{"node": "Registra Evento CRM", "type": "main", "index": 0}],
+        [{"node": "Ha Testo Conversazione?", "type": "main", "index": 0}]
+      ]
+    },
+    "Ha Testo Conversazione?": {
+      "main": [
+        [{"node": "Analizza Conversazione CRM AI", "type": "main", "index": 0}],
+        [{"node": "Risposta Senza Analisi", "type": "main", "index": 0}]
+      ]
+    },
+    "Analizza Conversazione CRM AI": {
+      "main": [[{"node": "Risposta Operativa", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "pinData": {},
+  "versionId": "crm-ai-ingest-v1",
+  "triggerCount": 1,
+  "tags": [
+    {
+      "name": "CRM AI Relazionale"
+    },
+    {
+      "name": "MVP"
+    }
+  ]
+}
