@@ -1,0 +1,38 @@
+{
+  "name": "CRM AI - Daily Priorities Notification",
+  "nodes": [
+    {
+      "id": "cron",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "name": "Ogni mattina alle 8",
+      "parameters": { "rule": { "hour": 8, "minute": 0 } },
+      "position": [100, 200]
+    },
+    {
+      "id": "get-users",
+      "type": "n8n-nodes-base.httpRequest",
+      "name": "Prendi utenti attivi",
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/user_profiles",
+        "headers": { "apikey": "={{ $env.SUPABASE_KEY }}", "Authorization": "Bearer {{ $env.SUPABASE_SERVICE_KEY }}" }
+      },
+      "position": [300, 200]
+    },
+    {
+      "id": "get-priorities",
+      "type": "n8n-nodes-base.httpRequest",
+      "name": "Ottieni priorità del giorno",
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.APP_URL }}/api/ai/priorities",
+        "headers": { "x-user-id": "={{ $json.id }}" }
+      },
+      "position": [500, 200]
+    }
+  ],
+  "connections": {
+    "Ogni mattina alle 8": { "main": [[ { "node": "Prendi utenti attivi" } ]] },
+    "Prendi utenti attivi": { "main": [[ { "node": "Ottieni priorità del giorno" } ]] }
+  }
+}

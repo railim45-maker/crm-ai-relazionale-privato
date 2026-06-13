@@ -1,0 +1,54 @@
+{
+  "name": "CRM AI - WhatsApp Ingestion",
+  "nodes": [
+    {
+      "id": "webhook-trigger",
+      "type": "n8n-nodes-base.webhook",
+      "name": "WhatsApp Webhook",
+      "parameters": { "path": "whatsapp-crm", "httpMethod": "POST" },
+      "position": [100, 200]
+    },
+    {
+      "id": "extract-message",
+      "type": "n8n-nodes-base.code",
+      "name": "Estrai messaggio",
+      "parameters": {
+        "jsCode": "const body = $input.first().json;\nconst msg = body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];\nif (!msg) return [];\nreturn [{ json: { phone: msg.from, text: msg.text?.body || '', type: msg.type, timestamp: msg.timestamp } }];"
+      },
+      "position": [300, 200]
+    },
+    {
+      "id": "find-contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "name": "Trova contatto in Supabase",
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/contacts",
+        "headers": { "apikey": "={{ $env.SUPABASE_KEY }}", "Authorization": "Bearer {{ $env.SUPABASE_KEY }}" },
+        "queryParameters": { "whatsapp": "eq.{{ $json.phone }}", "select": "id,first_name,last_name" }
+      },
+      "position": [500, 200]
+    },
+    {
+      "id": "call-crm-api",
+      "type": "n8n-nodes-base.httpRequest",
+      "name": "Analizza con CRM AI",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.APP_URL }}/api/conversations/analyze",
+        "bodyType": "formData",
+        "formData": {
+          "contact_id": "={{ $('Trova contatto in Supabase').first().json[0]?.id }}",
+          "channel": "whatsapp",
+          "text": "={{ $('Estrai messaggio').first().json.text }}"
+        }
+      },
+      "position": [700, 200]
+    }
+  ],
+  "connections": {
+    "WhatsApp Webhook": { "main": [[ { "node": "Estrai messaggio" } ]] },
+    "Estrai messaggio": { "main": [[ { "node": "Trova contatto in Supabase" } ]] },
+    "Trova contatto in Supabase": { "main": [[ { "node": "Analizza con CRM AI" } ]] }
+  }
+}
