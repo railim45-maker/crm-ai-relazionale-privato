@@ -93,3 +93,22 @@ Dopo il salvataggio, la scheda diventa subito utilizzabile: puoi aprirla nel dat
 ## Verifica già effettuata
 
 Sono stati eseguiti `npm run type-check` e `npm run build`; entrambi sono terminati correttamente dopo l’aggiunta dell’inserimento rapido lead/clienti.
+
+## Aggiornamento: assistente strategico per messaggistica soft-closing
+
+Il CRM è stato esteso per supportare non solo l’archiviazione dei lead, ma anche la preparazione della **prossima mossa commerciale**. Nella sezione **Agente** sono ora disponibili tre controlli operativi: tono di vendita, obiettivo conversazionale e template di messaggio. Questo permette di generare comunicazioni coerenti con il metodo richiesto: cordiali, soft, non invasive e orientate a guidare la conversazione verso diagnosi, fiducia, mini-demo, appuntamento o closing morbido.
+
+| Funzione | Uso pratico | Risultato atteso |
+|---|---|---|
+| Tono vendita | Scegli tra Cordiale, Soft, Consulenziale e Diretto gentile. | Il messaggio evita pressione e mantiene un approccio umano. |
+| Obiettivo | Scegli tra apertura relazione, comprensione bisogno, gestione obiezione, mini-demo o appuntamento. | Il CRM suggerisce la prossima mossa invece di produrre messaggi generici. |
+| Template | Usa opener, diagnosi, qualifica, su misura, posizionamento o closing morbido. | Email e WhatsApp seguono una sequenza logica di vendita consultiva. |
+| Coach strategico | Legge il lead selezionato e propone gancio, bisogno da verificare e passo successivo. | Il venditore resta concentrato sulla conversazione, non sull’amministrazione del CRM. |
+
+La regola implementata resta coerente con l’impostazione precedente: **le fonti, i conteggi e la ricerca interna non vengono inseriti nei messaggi al lead**. L’assistente usa quei dati solo come contesto per aiutare il venditore a scegliere gancio, domanda e prossima azione. Al potenziale cliente arrivano solo elementi utili: una domanda concreta, un beneficio pratico e un invito leggero al passo successivo.
+
+Esempio di utilizzo consigliato: seleziona un lead, imposta tono **Soft**, obiettivo **Capire bisogno** e template **Diagnosi**. Il CRM produrrà un messaggio che non tenta di vendere subito, ma apre una conversazione con una domanda mirata. Se il lead risponde positivamente, puoi passare a **Proporre mini-demo** o **Chiudere appuntamento**.
+
+## Verifica aggiornata
+
+Dopo l’aggiunta dell’assistente strategico sono stati rieseguiti `npm run type-check` e `npm run build`; entrambi sono terminati correttamente.
