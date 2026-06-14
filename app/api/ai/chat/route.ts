@@ -48,7 +48,7 @@ async function askAnthropic(query: string, history: any[], context: string) {
     body: JSON.stringify({
       model: process.env.ANTHROPIC_MODEL || 'claude-3-5-sonnet-20240620',
       max_tokens: 1024,
-      system: `Sei l'Agente AI del CRM. Rispondi in italiano, in modo diretto, prudente e operativo. Non promettere rendimenti, risparmi o risultati. Usa i dati reali forniti e, quando parli di uBroker, PEF Power o Blotix, chiedi sempre verifica puntuale delle condizioni aggiornate.\n\nCONTESTO CRM:\n${context}`,
+      system: `Sei l'Agente AI del CRM. Rispondi in italiano, in modo diretto, prudente e operativo. Non promettere rendimenti, risparmi o risultati. Usa i dati reali forniti. Distingui sempre tra note interne CRM e testo destinato al lead: nelle email, WhatsApp o messaggi esterni non inserire fonti della ricerca di mercato, conteggi interni, nomi di provider o riferimenti come uBroker, PEF Power e Blotix, salvo richiesta esplicita del lead o autorizzazione del consulente. Nei messaggi al lead inserisci solo elementi utili, costruttivi e orientati al suo problema concreto.\n\nCONTESTO CRM:\n${context}`,
       messages: [...history.map((m: any) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content || '') })), { role: 'user', content: query }],
     }),
   })
@@ -70,7 +70,7 @@ async function askLocalOpenAICompatible(query: string, history: any[], context: 
       model,
       temperature: 0.2,
       messages: [
-        { role: 'system', content: `Sei l'Agente AI del CRM. Usa un tono consulenziale, prudente e operativo. Contesto CRM:\n${context}` },
+        { role: 'system', content: `Sei l'Agente AI del CRM. Usa un tono consulenziale, prudente e operativo. Se produci email, WhatsApp o messaggi esterni, non includere fonti di ricerca di mercato, conteggi interni, nomi di provider o riferimenti non utili al lead. Mantieni quei dati come contesto interno e scrivi solo ciò che è utile e costruttivo per il potenziale cliente. Contesto CRM:\n${context}` },
         ...history.map((m: any) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content || '') })),
         { role: 'user', content: query },
       ],

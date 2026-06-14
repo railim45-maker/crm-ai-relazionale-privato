@@ -169,17 +169,31 @@ export function buildGuidedResearch(contact: ConsultingContact) {
 export function buildConsultingStudy(contact: ConsultingContact): string {
   const snap = valuationSnapshot(contact)
   const energyPath = contact.preferred_energy_path || 'Da valutare tra uBroker, PEF Power o altra opzione verificata'
-  return `Studio su misura per ${businessName(contact)}. Prima fase: diagnosi dei bisogni reali e raccolta dati verificabili. Valore aziendale indicativo ${euro(snap.estimatedCompanyValue)}, simulazione prudenziale 2,5% annuo ${euro(snap.annualTokenYield)}, risparmio energia stimato ${euro(snap.expectedEnergySaving)}, copertura totale ${euro(snap.totalCoverage)} rispetto a servizi per ${euro(snap.annualServiceCost)}. Percorso energia: ${energyPath}. Nota prudenziale: tokenizzazione, energia e AI vanno presentate come ipotesi da verificare, non come garanzie.`
+  return `Studio interno su misura per ${businessName(contact)}. Prima fase: diagnosi dei bisogni reali e raccolta dati verificabili. Valore aziendale indicativo ${euro(snap.estimatedCompanyValue)}, simulazione prudenziale 2,5% annuo ${euro(snap.annualTokenYield)}, risparmio energia stimato ${euro(snap.expectedEnergySaving)}, copertura totale ${euro(snap.totalCoverage)} rispetto a servizi per ${euro(snap.annualServiceCost)}. Percorso energia: ${energyPath}. Nota interna: tokenizzazione, energia e AI vanno presentate come ipotesi da verificare, non come garanzie. Questo testo è per il consulente, non per l’email al lead.`
+}
+
+export function buildLeadValueNote(contact: ConsultingContact): string {
+  const company = businessName(contact)
+  const needs = contact.probable_needs?.trim()
+  const path = contact.recommended_path?.trim()
+  const questions = contact.recommended_questions?.trim()
+
+  const valueParts = [
+    needs ? `ho individuato alcuni punti che potrebbero incidere sull’organizzazione: ${needs}` : `possiamo individuare insieme i passaggi operativi che oggi assorbono più tempo o creano più dispersione`,
+    path ? `da lì si può costruire un percorso semplice: ${path}` : `l’obiettivo è capire se una piccola automazione, una revisione del primo contatto o una migliore gestione dei servizi può portare beneficio concreto`,
+    questions ? `mi preparerei partendo da queste domande: ${questions}` : `prima di qualsiasi proposta, partirei da poche domande pratiche sui processi reali`,
+  ]
+
+  return `Per ${company}, ${valueParts.join('. ')}.`
 }
 
 export function buildCloserMessage(contact: ConsultingContact, step: 'opener' | 'diagnose' | 'tailored' | 'close' = 'opener') {
   const person = contactDisplayName(contact)
   const company = businessName(contact)
-  const hook = contact.personalization_hook || `il modo in cui ${company} si presenta pubblicamente ai clienti`
-  const research = buildGuidedResearch(contact)
-  const study = buildConsultingStudy(contact)
+  const hook = contact.personalization_hook || `il modo in cui ${company} si presenta ai clienti`
+  const valueNote = buildLeadValueNote(contact)
   if (step === 'diagnose') return `Buongiorno ${person}, prima di proporle qualcosa preferisco farle una domanda concreta. Ho visto ${hook}. Oggi per ${company} pesa di più gestire richieste ripetitive, ridurre costi, alleggerire lo staff, migliorare il primo contatto o valutare energia/servizi?`
-  if (step === 'tailored') return `Buongiorno ${person}, sulla base delle sole informazioni pubbliche ho preparato una traccia prudente, da correggere con lei. ${research.summary} ${study} Se vuole, partiamo da 10 minuti di diagnosi e non da un preventivo standard.`
+  if (step === 'tailored') return `Buongiorno ${person}, le scrivo con un taglio molto pratico e senza proposta preconfezionata. ${valueNote} Se vuole, partiamo da 10 minuti di diagnosi: se emerge qualcosa di utile le preparo un esempio concreto, altrimenti ci fermiamo lì.`
   if (step === 'close') return `Buongiorno ${person}, se ha senso facciamo un passo semplice: mini-demo o esempio scritto su ${company}, basato su 2-3 richieste reali. Se non vede valore, ci fermiamo lì. Preferisce call breve o esempio via email?`
   return `Buongiorno ${person}, le scrivo perché ho notato ${hook}. Per ${company}, qual è oggi la richiesta dei clienti che fa perdere più tempo o rischia di restare senza risposta nel momento giusto? Se ha senso, preparo un esempio molto breve e concreto.`
 }
@@ -190,10 +204,10 @@ export function ruleBasedAgentAnswer(query: string, contacts: ConsultingContact[
   const ranked = contacts.slice().sort((a, b) => (toNumber(b.interest_level) + toNumber(b.trust_level) + toNumber(b.potential_value) / 1000) - (toNumber(a.interest_level) + toNumber(a.trust_level) + toNumber(a.potential_value) / 1000))
   const top = ranked[0]
   if (lower.includes('studio') || lower.includes('energia') || lower.includes('token')) return buildConsultingStudy(top)
-  if (lower.includes('messaggio') || lower.includes('closer') || lower.includes('whatsapp')) return buildCloserMessage(top, 'diagnose')
+  if (lower.includes('messaggio') || lower.includes('closer') || lower.includes('whatsapp') || lower.includes('email') || lower.includes('mail')) return buildCloserMessage(top, lower.includes('email') || lower.includes('mail') ? 'tailored' : 'diagnose')
   if (lower.includes('font') || lower.includes('contegg')) {
     const c = buildGuidedResearch(top)
     return `Per ${businessName(top)} risultano ${c.verified} elementi pubblici/CRM valorizzati, confidenza ${c.label} (${c.score}/100). Mancano: ${c.missing.join(', ') || 'nessun campo essenziale'}. Fonti quadro: ${PUBLIC_REFERENCES.map((r) => r.name).join(', ')}.`
   }
-  return `Priorità consigliata: ${businessName(top)}. Completa ricerca guidata, poi usa una domanda diagnostica. ${buildGuidedResearch(top).summary}`
+  return `Priorità consigliata: ${businessName(top)}. La ricerca guidata resta materiale interno CRM; verso il lead usa solo una domanda diagnostica o un messaggio orientato al valore. ${buildLeadValueNote(top)}`
 }
