@@ -28,9 +28,18 @@ export async function PATCH(req: NextRequest, { params }: RouteContext) {
   const body = await req.json()
   const allowed = [
     'first_name', 'last_name', 'role', 'email', 'phone', 'whatsapp', 'telegram', 'linkedin',
-    'status', 'trust_level', 'interest_level', 'potential_value', 'last_contact_at', 'notes', 'tags'
+    'website', 'address', 'city', 'province', 'country',
+    'status', 'trust_level', 'interest_level', 'potential_value', 'last_contact_at', 'notes', 'tags',
+    'research_entry_mode', 'commercial_name', 'company_legal_name', 'commercial_aliases',
+    'public_sources', 'facebook_page_candidates', 'confirmed_facebook_page', 'person_company_links',
+    'public_complaints', 'research_summary', 'probable_needs', 'recommended_questions',
+    'recommended_path', 'confidence_score', 'personalization_hook', 'message_angle',
+    'outreach_stage', 'source_batch', 'paid_share_capital', 'real_estate_value',
+    'inventory_value', 'equipment_value', 'receivables_value', 'cash_value', 'brand_value',
+    'annual_revenue', 'annual_ebitda', 'annual_energy_cost', 'expected_energy_saving_pct',
+    'annual_service_cost', 'preferred_energy_path', 'study_notes', 'service_plafond_notes', 'metadata'
   ]
-  const updates: Record<string, unknown> = {}
+  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() }
   for (const key of allowed) {
     if (body[key] !== undefined) updates[key] = body[key]
   }
