@@ -11,6 +11,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const router = useRouter()
   const supabase = createClient()
+  const redirectTo = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('redirect') || '/demo' : '/demo'
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
@@ -19,7 +20,7 @@ export default function LoginPage() {
     if (error) {
       toast.error(error.message)
     } else {
-      router.push('/dashboard')
+      router.push(redirectTo)
     }
     setLoading(false)
   }
@@ -34,7 +35,7 @@ export default function LoginPage() {
           <span className="text-xl font-bold text-gray-900">CRM AI</span>
         </div>
         <h1 className="text-2xl font-bold text-gray-900 mb-1">Bentornato</h1>
-        <p className="text-sm text-gray-500 mb-6">Accedi al tuo CRM relazionale</p>
+        <p className="text-sm text-gray-500 mb-6">Accedi per usare il CRM operativo con salvataggio persistente dei lead.</p>
         <form onSubmit={handleLogin} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>

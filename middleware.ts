@@ -19,8 +19,11 @@ export async function middleware(request: NextRequest) {
     }
   )
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user && request.nextUrl.pathname.startsWith('/dashboard')) {
-    return NextResponse.redirect(new URL('/auth/login', request.url))
+  const requiresAuth = request.nextUrl.pathname.startsWith('/dashboard') || request.nextUrl.pathname.startsWith('/demo')
+  if (!user && requiresAuth) {
+    const loginUrl = new URL('/auth/login', request.url)
+    loginUrl.searchParams.set('redirect', request.nextUrl.pathname)
+    return NextResponse.redirect(loginUrl)
   }
   if (user && request.nextUrl.pathname.startsWith('/auth')) {
     return NextResponse.redirect(new URL('/dashboard', request.url))
@@ -28,4 +31,4 @@ export async function middleware(request: NextRequest) {
   return response
 }
 
-export const config = { matcher: ['/dashboard/:path*', '/auth/:path*'] }
+export const config = { matcher: ['/dashboard/:path*', '/demo/:path*', '/auth/:path*'] }
