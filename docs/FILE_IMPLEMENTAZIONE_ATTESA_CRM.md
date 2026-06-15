@@ -93,3 +93,48 @@ Dopo il salvataggio, la scheda diventa subito utilizzabile: puoi aprirla nel dat
 ## Verifica già effettuata
 
 Sono stati eseguiti `npm run type-check` e `npm run build`; entrambi sono terminati correttamente dopo l’aggiunta dell’inserimento rapido lead/clienti.
+
+## Aggiornamento: assistente strategico per messaggistica soft-closing
+
+Il CRM è stato esteso per supportare non solo l’archiviazione dei lead, ma anche la preparazione della **prossima mossa commerciale**. Nella sezione **Agente** sono ora disponibili tre controlli operativi: tono di vendita, obiettivo conversazionale e template di messaggio. Questo permette di generare comunicazioni coerenti con il metodo richiesto: cordiali, soft, non invasive e orientate a guidare la conversazione verso diagnosi, fiducia, mini-demo, appuntamento o closing morbido.
+
+| Funzione | Uso pratico | Risultato atteso |
+|---|---|---|
+| Tono vendita | Scegli tra Cordiale, Soft, Consulenziale e Diretto gentile. | Il messaggio evita pressione e mantiene un approccio umano. |
+| Obiettivo | Scegli tra apertura relazione, comprensione bisogno, gestione obiezione, mini-demo o appuntamento. | Il CRM suggerisce la prossima mossa invece di produrre messaggi generici. |
+| Template | Usa opener, diagnosi, qualifica, su misura, posizionamento o closing morbido. | Email e WhatsApp seguono una sequenza logica di vendita consultiva. |
+| Coach strategico | Legge il lead selezionato e propone gancio, bisogno da verificare e passo successivo. | Il venditore resta concentrato sulla conversazione, non sull’amministrazione del CRM. |
+
+La regola implementata resta coerente con l’impostazione precedente: **le fonti, i conteggi e la ricerca interna non vengono inseriti nei messaggi al lead**. L’assistente usa quei dati solo come contesto per aiutare il venditore a scegliere gancio, domanda e prossima azione. Al potenziale cliente arrivano solo elementi utili: una domanda concreta, un beneficio pratico e un invito leggero al passo successivo.
+
+Esempio di utilizzo consigliato: seleziona un lead, imposta tono **Soft**, obiettivo **Capire bisogno** e template **Diagnosi**. Il CRM produrrà un messaggio che non tenta di vendere subito, ma apre una conversazione con una domanda mirata. Se il lead risponde positivamente, puoi passare a **Proporre mini-demo** o **Chiudere appuntamento**.
+
+## Verifica aggiornata
+
+Dopo l’aggiunta dell’assistente strategico sono stati rieseguiti `npm run type-check` e `npm run build`; entrambi sono terminati correttamente.
+
+
+## Correzione critica: persistenza reale dei lead/clienti
+
+Il problema segnalato era corretto: un CRM che si apre vuoto non è utilizzabile come strumento di lavoro. La demo precedente era **local-first**, quindi poteva mostrare dati solo se il browser, il profilo e lo stesso dominio conservavano il `localStorage`. In produzione questo non basta, perché un nuovo deploy, un dominio diverso, una sessione non autenticata o un browser diverso possono far sembrare il CRM vuoto anche senza un reset volontario.
+
+La nuova implementazione introduce una persistenza più sicura. All’apertura della demo, il CRM tenta di caricare i contatti da `/api/contacts?format=demo`. Se l’utente è autenticato e Supabase è configurato nel deploy, i lead vengono caricati dal database e non devono essere reinseriti ogni giorno. Se invece l’utente non è autenticato o il database non è raggiungibile, il CRM mostra chiaramente che sta lavorando in **modalità locale** e invita a usare Backup/Importa fino alla correzione della configurazione.
+
+| Stato visibile nel CRM | Significato pratico | Cosa fare |
+|---|---|---|
+| Database persistente attivo | I contatti sono caricati e salvati sul database cloud. | Puoi lavorare normalmente: i lead devono riapparire alla riapertura. |
+| Salvataggio automatico | Il CRM sta copiando le modifiche nel database. | Attendere qualche secondo prima di chiudere. |
+| Accesso non effettuato | La pagina non ha un utente autenticato, quindi il database non può sapere a chi assegnare i contatti. | Effettuare login dal CRM prima di lavorare in modo definitivo. |
+| Database non raggiungibile | Supabase o le variabili ambiente del deploy non sono disponibili. | Non inserire grandi liste senza esportare un backup; correggere configurazione Vercel/Supabase. |
+
+File aggiunti o modificati per questa correzione:
+
+| File | Funzione |
+|---|---|
+| `lib/demo-crm-mapping.ts` | Converte i contatti della demo nel formato della tabella `contacts` e conserva i campi extra nel campo `metadata`. |
+| `app/api/contacts/route.ts` | Ora può restituire i contatti anche in formato demo tramite `?format=demo` e accetta nuovi contatti provenienti dalla demo. |
+| `app/api/contacts/[id]/route.ts` | Ora può aggiornare contatti in formato demo senza perdere i campi operativi. |
+| `app/api/contacts/sync/route.ts` | Nuova route di sincronizzazione massiva: crea o aggiorna i contatti della demo nel database persistente dell’utente autenticato. |
+| `app/demo/page.tsx` | Aggiunto caricamento cloud all’avvio, autosalvataggio sul database, fallback locale e indicatore visibile dello stato di persistenza. |
+
+Dopo il nuovo deploy, la regola operativa è semplice: **prima fai login, poi apri la demo e verifica che compaia “Database persistente attivo”**. Solo dopo questo messaggio conviene iniziare a inserire molti lead. Se compare modalità locale, si può testare il CRM, ma prima di chiudere bisogna esportare un backup.

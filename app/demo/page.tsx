@@ -13,10 +13,14 @@ type MailingPriorityFilter = 'Tutte' | PriorityLevel
 type MailingStageFilter = 'Tutti' | OutreachStage
 type MailingSeparator = 'virgola' | 'punto e virgola'
 type CommunicationTemplate = 'opener' | 'diagnose' | 'qualify' | 'tailored' | 'position' | 'close'
+type SalesTone = 'Cordiale' | 'Soft' | 'Consulenziale' | 'Diretto gentile'
+type StrategicIntent = 'Aprire relazione' | 'Capire bisogno' | 'Gestire obiezione' | 'Proporre mini-demo' | 'Chiudere appuntamento'
 type ResearchEntryMode = 'Azienda' | 'Persona fisica'
+type CloudPersistenceStatus = 'verifica' | 'cloud' | 'locale' | 'errore' | 'salvataggio'
 
 type Contact = {
   id: string
+  dbId?: string
   name: string
   company: string
   role: string
@@ -116,6 +120,7 @@ type ConversationRecord = {
 
 type CrmProfile = {
   id: string
+  dbId?: string
   name: string
   createdAt: string
   updatedAt: string
@@ -134,6 +139,8 @@ const statuses: ContactStatus[] = ['Lead', 'Prospect', 'Interessato', 'Cliente',
 const priorityLevels: PriorityLevel[] = ['A', 'B', 'C']
 const outreachStages: OutreachStage[] = ['Da qualificare', 'Ricerca guidata', 'Video da preparare', 'Primo invio', 'Follow-up 1', 'Risposta ricevuta', 'Demo richiesta', 'Non interessato', 'Sospeso']
 const channels: Channel[] = ['Email', 'Telefono', 'WhatsApp', 'LinkedIn', 'Video', 'Nota interna']
+const salesTones: SalesTone[] = ['Cordiale', 'Soft', 'Consulenziale', 'Diretto gentile']
+const strategicIntents: StrategicIntent[] = ['Aprire relazione', 'Capire bisogno', 'Gestire obiezione', 'Proporre mini-demo', 'Chiudere appuntamento']
 
 const emptyDraft: ContactDraft = {
   name: '',
@@ -421,6 +428,7 @@ function agentAnswer(question: string, contacts: Contact[], tasks: Task[], conve
   if (lower.includes('100') || lower.includes('database')) return `Database attuale: ${contacts.length}/100 contatti. A-list: ${aList.length}. Da qualificare: ${toQualify.length}. Il lavoro corretto è completare i campi mancanti dei lead A prima di aggiungere troppi nominativi.`
   if (lower.includes('task') || lower.includes('follow')) return openTasks.length === 0 ? 'Non ci sono task aperti. Crea almeno un prossimo passo per ogni contatto A o B.' : `Hai ${openTasks.length} task aperti: ${openTasks.slice(0, 4).map((t) => `${t.title} (${t.priority}, ${fmtDate(t.due)})`).join('; ')}.`
   if (lower.includes('caldi') || lower.includes('lead')) return `I lead più caldi sono: ${hot.slice(0, 5).map((c) => `${c.name} · priorità ${c.priorityLevel || 'B'} · ${c.outreachStage || 'Da qualificare'} · interesse ${c.interest}/10`).join('; ')}.`
+  if (lower.includes('messaggio') || lower.includes('whatsapp') || lower.includes('email') || lower.includes('closing') || lower.includes('chiud') || lower.includes('soft')) { const target = hot[0]; const business = (target.company || target.name).trim(); const person = (target.decisionMakerName || target.name).trim(); const hook = target.personalizationHook || `il primo contatto dei clienti con ${business}`; const need = compactLines(target.probableNeeds)[0] || target.messageAngle || 'capire se richieste, tempi di risposta o follow-up assorbono tempo utile'; return `Strategia consigliata per ${business}: apri in modo cordiale, fai una sola domanda concreta e non vendere subito. Gancio utile: ${hook}. Bisogno da verificare: ${need}. Messaggio soft: Buongiorno ${person}, le scrivo perché ho notato ${hook}. Le faccio solo una domanda: per ${business}, quale richiesta dei clienti vi fa perdere più tempo o rischia di non ricevere risposta nel momento giusto? Se ha senso, posso prepararle un esempio molto breve e concreto, senza impegno.` }
   if (lower.includes('studio') || lower.includes('token') || lower.includes('plafond') || lower.includes('bollette') || lower.includes('energia')) { const target = hot[0]; const snap = valuationSnapshot(target); return `${tailoredStudyPrompt(target)} Prossima mossa: raccogli i dati mancanti e non vendere subito; costruisci un vestito su misura legato a problemi reali, copertura economica e priorità della persona.` }
   if (lower.includes('pipeline') || lower.includes('valore')) return `La pipeline totale stimata è ${euro(pipeline)}. ${statuses.map((s) => `${s}: ${euro(contacts.filter((c) => c.status === s).reduce((sum, c) => sum + c.value, 0))}`).join('; ')}.`
   if (lower.includes('conversazioni') || lower.includes('analisi')) return `Hai archiviato ${conversations.length} comunicazioni. Ultima analisi: ${conversations[0]?.analysis.summary || 'nessuna analisi ancora presente'}`
@@ -454,11 +462,16 @@ export default function DemoAppPage() {
   const [mailingSeparator, setMailingSeparator] = useState<MailingSeparator>('punto e virgola')
   const [mailingCopied, setMailingCopied] = useState(false)
   const [assistedTemplate, setAssistedTemplate] = useState<CommunicationTemplate>('opener')
+  const [salesTone, setSalesTone] = useState<SalesTone>('Soft')
+  const [strategicIntent, setStrategicIntent] = useState<StrategicIntent>('Capire bisogno')
   const [assistedFeedback, setAssistedFeedback] = useState('')
   const [studySavedFeedback, setStudySavedFeedback] = useState('')
   const [researchSavedFeedback, setResearchSavedFeedback] = useState('')
   const [quickPasteText, setQuickPasteText] = useState('')
   const [quickPasteFeedback, setQuickPasteFeedback] = useState('')
+  const [cloudStatus, setCloudStatus] = useState<CloudPersistenceStatus>('verifica')
+  const [cloudMessage, setCloudMessage] = useState('Verifico se il CRM può salvare sul database persistente.')
+  const [cloudReady, setCloudReady] = useState(false)
 
   function loadProfileData(profileId: string, useLegacyFallback = false) {
     try {
@@ -476,6 +489,66 @@ export default function DemoAppPage() {
     setContacts([]); setTasks([]); setConversations([]); setSelectedContactId(''); setAnalysis(null)
   }
 
+  async function loadCloudContacts(localSnapshot: Contact[] = []) {
+    setCloudStatus('verifica')
+    setCloudMessage('Controllo collegamento al database persistente...')
+    try {
+      const response = await fetch('/api/contacts?format=demo', { cache: 'no-store' })
+      if (response.status === 401) {
+        setCloudStatus('locale')
+        setCloudReady(false)
+        setCloudMessage('Accesso non effettuato: i dati restano solo nel browser. Per ritrovarli ogni giorno, accedi al CRM e collega il database.')
+        return
+      }
+      if (!response.ok) throw new Error('Database non disponibile')
+      const payload = await response.json()
+      const cloudContacts = Array.isArray(payload.contacts) ? payload.contacts.map(normalizeContact) : []
+      setCloudStatus('cloud')
+      setCloudReady(true)
+      setCloudMessage(`Database persistente attivo: ${cloudContacts.length} contatti caricati dal cloud.`)
+      if (cloudContacts.length > 0) {
+        setContacts(cloudContacts)
+        setSelectedContactId(cloudContacts[0]?.id || '')
+      } else if (localSnapshot.length > 0) {
+        await syncCloudContacts(localSnapshot, 'Ho trovato dati locali: li sto copiando nel database persistente.')
+      }
+    } catch {
+      setCloudStatus('errore')
+      setCloudReady(false)
+      setCloudMessage('Database non raggiungibile: continuo in modalità locale. Usa Backup/Importa finché il deploy non ha Supabase configurato.')
+    }
+  }
+
+  async function syncCloudContacts(snapshot: Contact[] = contacts, customMessage?: string) {
+    if (!snapshot.length) return
+    setCloudStatus('salvataggio')
+    setCloudMessage(customMessage || 'Salvataggio automatico dei contatti sul database persistente...')
+    try {
+      const response = await fetch('/api/contacts/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contacts: snapshot }),
+      })
+      if (response.status === 401) {
+        setCloudStatus('locale')
+        setCloudReady(false)
+        setCloudMessage('Non sei autenticato: modifiche salvate solo nel browser. Accedi per renderle persistenti.')
+        return
+      }
+      if (!response.ok && response.status !== 207) throw new Error('Sincronizzazione fallita')
+      const payload = await response.json()
+      const saved = Array.isArray(payload.saved) ? payload.saved.map(normalizeContact) : []
+      if (saved.length > 0) setContacts(saved)
+      setCloudStatus(response.status === 207 ? 'errore' : 'cloud')
+      setCloudReady(response.status !== 207)
+      setCloudMessage(response.status === 207 ? 'Sincronizzazione parziale: alcuni contatti non sono stati salvati. Esegui Backup prima di chiudere.' : `Salvato sul database persistente: ${saved.length || snapshot.length} contatti.`)
+    } catch {
+      setCloudStatus('errore')
+      setCloudReady(false)
+      setCloudMessage('Errore di salvataggio cloud: dati mantenuti localmente. Esporta un backup prima di chiudere.')
+    }
+  }
+
   useEffect(() => {
     try {
       const savedProfiles = window.localStorage.getItem(PROFILE_LIST_KEY)
@@ -491,15 +564,22 @@ export default function DemoAppPage() {
       setActiveProfileId(nextActive)
       window.localStorage.setItem(ACTIVE_PROFILE_KEY, nextActive)
       loadProfileData(nextActive, nextActive === parsedProfiles[0].id)
+      const localSnapshot = (() => { try { const stored = window.localStorage.getItem(profileStorageKey(nextActive)); const parsed = stored ? JSON.parse(stored) as StoredCrmData : null; return Array.isArray(parsed?.contacts) ? parsed.contacts.map(normalizeContact) : [] } catch { return [] } })()
+      void loadCloudContacts(localSnapshot)
     } catch {
       const timestamp = nowIso()
       const fallback = [{ id: 'profilo-io', name: 'Io', createdAt: timestamp, updatedAt: timestamp }]
-      setProfiles(fallback); setActiveProfileId(fallback[0].id); loadProfileData(fallback[0].id, true)
+      setProfiles(fallback); setActiveProfileId(fallback[0].id); loadProfileData(fallback[0].id, true); void loadCloudContacts([])
     }
     setHydrated(true)
   }, [])
 
   useEffect(() => { if (hydrated && activeProfileId) window.localStorage.setItem(profileStorageKey(activeProfileId), JSON.stringify({ contacts, tasks, conversations })) }, [contacts, tasks, conversations, hydrated, activeProfileId])
+  useEffect(() => {
+    if (!hydrated || !cloudReady || cloudStatus === 'salvataggio') return
+    const timer = window.setTimeout(() => { void syncCloudContacts(contacts) }, 1200)
+    return () => window.clearTimeout(timer)
+  }, [contacts, hydrated, cloudReady])
   useEffect(() => { if (hydrated) window.localStorage.setItem(PROFILE_LIST_KEY, JSON.stringify(profiles)) }, [profiles, hydrated])
   useEffect(() => { if (section === 'study' && selectedContact) setDraft(draftFromContact(selectedContact)) }, [section, selectedContactId])
 
@@ -911,63 +991,164 @@ export default function DemoAppPage() {
     })[step]
   }
 
+  function toneInstruction(tone: SalesTone) {
+    return ({
+      Cordiale: 'tono caldo, umano e rispettoso, con frasi semplici e zero pressione',
+      Soft: 'tono leggero, non invasivo, orientato a una domanda utile prima della proposta',
+      Consulenziale: 'tono professionale: diagnosi, contesto operativo e proposta solo se emerge valore',
+      'Diretto gentile': 'tono sintetico e chiaro, ma sempre educato e senza urgenze artificiali',
+    })[tone]
+  }
+
+  function intentInstruction(intent: StrategicIntent) {
+    return ({
+      'Aprire relazione': 'obiettivo: aprire una conversazione naturale, senza vendere subito',
+      'Capire bisogno': 'obiettivo: far emergere il problema reale con una domanda concreta',
+      'Gestire obiezione': 'obiettivo: abbassare la pressione, riconoscere il dubbio e proporre un passo piccolo',
+      'Proporre mini-demo': 'obiettivo: offrire un esempio pratico e reversibile, non un impegno',
+      'Chiudere appuntamento': 'obiettivo: portare a una call breve o a un esempio scritto con scelta semplice',
+    })[intent]
+  }
+
+  function softClosingGuidance(contact: Contact) {
+    const business = contactBusinessName(contact)
+    const hook = contact.personalizationHook || `il primo contatto dei clienti con ${business}`
+    const likelyNeed = compactLines(contact.probableNeeds)[0] || contact.messageAngle || 'capire se richieste, tempi di risposta o follow-up assorbono tempo utile'
+    const nextStep = strategicIntent === 'Chiudere appuntamento' ? 'proporre 10 minuti oppure un esempio scritto' : strategicIntent === 'Proporre mini-demo' ? 'preparare una mini-demo basata su 2-3 richieste tipiche' : strategicIntent === 'Gestire obiezione' ? 'chiedere qual è il dubbio principale e offrire un passo senza impegno' : 'fare una sola domanda diagnostica e ascoltare la risposta'
+    return { business, hook, likelyNeed, nextStep, tone: toneInstruction(salesTone), intent: intentInstruction(strategicIntent) }
+  }
+
+  function strategicCoachNote(contact?: Contact) {
+    if (!contact) return 'Seleziona un lead: l’assistente ti suggerirà tono, obiettivo, messaggio e prossima mossa senza trasformare il CRM in lavoro amministrativo.'
+    const guide = softClosingGuidance(contact)
+    return `Strategia per ${guide.business}: ${guide.intent}. Usa ${guide.tone}. Gancio utile: ${guide.hook}. Bisogno da verificare: ${guide.likelyNeed}. Prossima mossa: ${guide.nextStep}. Evita riferimenti alla ricerca interna, conteggi, fonti o strumenti non necessari: al lead deve arrivare solo valore pratico.`
+  }
+
   function buildEmailTemplate(contact: Contact): { subject: string; body: string } {
     const person = contactDisplayName(contact)
     const business = contactBusinessName(contact)
     const city = contact.city || 'la sua zona'
-    const hook = contact.personalizationHook || `il modo in cui ${business} si presenta ai clienti`
-    const angle = contact.messageAngle || 'gestire meglio richieste e primi contatti senza automatismi invasivi'
+    const guide = softClosingGuidance(contact)
     const category = (contact.category || contact.role || 'attività').toLowerCase()
     const questions = strategicQuestions(contact)
-    const guidedContext = buildGuidedCloserContext(contact)
+    const valueLine = `L’idea non è aggiungere complessità, ma capire se si può alleggerire un passaggio concreto: ${guide.likelyNeed}.`
+    const gentleClose = strategicIntent === 'Chiudere appuntamento'
+      ? 'Le andrebbe bene sentirci 10 minuti, oppure preferisce che le mandi prima un esempio scritto?'
+      : strategicIntent === 'Proporre mini-demo'
+        ? `Se vuole, posso prepararle una mini-demo testuale su un caso tipico di ${business}, così valuta subito se ha senso.`
+        : strategicIntent === 'Gestire obiezione'
+          ? 'Se in questo momento non è una priorità, nessun problema: mi basta capire quale aspetto avrebbe senso eventualmente approfondire più avanti.'
+          : 'Se mi risponde anche solo con due righe, capisco se ha senso prepararle un esempio utile oppure se non è il momento.'
 
     if (assistedTemplate === 'diagnose') return {
       subject: `Una domanda pratica su ${business}`,
-      body: `Buongiorno ${person},\n\nle faccio una domanda molto concreta, prima ancora di parlarle di soluzioni.\n\nHo notato ${hook}. ${contact.researchSummary ? `Dal contesto pubblico emerge un quadro da verificare con lei, senza dare nulla per scontato: ${contact.researchSummary}\n\n` : ''}In una ${category} come ${business}, capita spesso che molte energie vadano in risposte ripetitive: disponibilità, prezzi, servizi, orari, prenotazioni o prime richieste non ancora qualificate.\n\n${questions.slice(0, 3).map((q) => `- ${q}`).join('\n')}\n\nSe mi risponde anche solo a una di queste domande, riesco a capire se ha senso prepararle un esempio utile oppure se non è il momento.\n\nResto a disposizione,\nVoice Desk`
+      body: `Buongiorno ${person},
+
+le scrivo in modo molto diretto ma leggero: prima di parlare di soluzioni, vorrei capire se questo tema è reale anche per voi.
+
+Ho notato ${guide.hook}. In una ${category} come ${business}, capita spesso che richieste, informazioni, disponibilità, prenotazioni o primi contatti assorbano tempo nei momenti meno comodi.
+
+La domanda è questa: ${questions[0]}
+
+${gentleClose}
+
+Resto a disposizione,
+Voice Desk`
     }
 
     if (assistedTemplate === 'qualify') return {
       subject: `Capire se può essere utile per ${business}`,
-      body: `Buongiorno ${person},\n\nper capire se l'idea può avere senso per ${business}, le chiederei solo tre cose rapide.\n\n1. Quante richieste simili ricevete in una settimana tra telefono, email, sito e WhatsApp?\n2. Quali richieste richiedono sempre le stesse risposte o fanno perdere più tempo allo staff?\n3. Se potesse migliorare un solo punto del primo contatto con il cliente, quale sceglierebbe?\n\nLa mia idea è valutare se Voice Desk possa aiutarvi a ${angle}, senza togliere il controllo umano e senza automatizzare ciò che deve restare personale.\n\nSe vuole, sulla base delle sue risposte preparo un esempio pratico.\n\nResto a disposizione,\nVoice Desk`
+      body: `Buongiorno ${person},
+
+per capire se posso esserle davvero utile, le chiederei solo tre cose rapide.
+
+1. Da quale canale arrivano più richieste: telefono, email, WhatsApp o sito?
+2. Quali richieste richiedono spesso le stesse risposte?
+3. Se potesse migliorare un solo punto del primo contatto con il cliente, quale sceglierebbe?
+
+${valueLine}
+
+Sulla base delle sue risposte posso prepararle un esempio pratico, senza impegno e senza proposta preconfezionata.
+
+Resto a disposizione,
+Voice Desk`
     }
 
     if (assistedTemplate === 'tailored') return {
-      subject: `Studio su misura per ${business}`,
-      body: `Buongiorno ${person},\n\nprima di parlare di un preventivo, secondo me ha più senso fare un piccolo studio sulla situazione reale di ${business}.\n\nL’obiettivo non è vendere un servizio standard, ma capire quali costi o problemi oggi pesano di più: richieste non gestite, tempo dello staff, bollette, tecnologia, marketing, oppure possibilità di valorizzare meglio l’azienda.\n\n${guidedContext}
+      subject: `Un esempio ragionato per ${business}`,
+      body: `Buongiorno ${person},
 
-Se ci sono dati disponibili, possiamo stimare in modo indicativo capitale sociale versato, immobili, magazzino, attrezzature, marginalità e costi energia. Da lì si può costruire un plafond servizi sostenibile, valutando anche il potenziale annuo del 2,5% collegato alla valorizzazione/tokenizzazione e l’eventuale efficientamento energetico.\n\nLe chiedo quindi una cosa semplice: oggi il problema più urgente per voi è ridurre costi, aumentare richieste/prenotazioni, alleggerire lo staff o valorizzare l’azienda?\n\nResto a disposizione,\nVoice Desk`
+secondo me per ${business} ha più senso partire da un piccolo ragionamento pratico, non da un preventivo standard.
+
+${valueLine}
+
+Il primo passo potrebbe essere molto semplice: capire quali richieste si ripetono, quali fanno perdere tempo e quali invece devono restare gestite in modo personale. Da lì si può valutare se una piccola automazione o una migliore organizzazione del primo contatto può portare beneficio reale.
+
+${gentleClose}
+
+Resto a disposizione,
+Voice Desk`
     }
 
     if (assistedTemplate === 'position') return {
       subject: `Esempio concreto per ${business}`,
-      body: `Buongiorno ${person},\n\npartendo da quanto emerge per ${business}, il punto non è “mettere un robot” davanti ai clienti. Il punto è ordinare il primo contatto, filtrare le richieste ripetitive e aiutare lo staff ad arrivare più preparato alla risposta.\n\nPer una ${category} a ${city}, Voice Desk può essere impostato per rispondere in modo coerente a domande frequenti, raccogliere informazioni utili e indirizzare solo le richieste importanti alla persona giusta.\n\nIn pratica: meno dispersione, più continuità, e controllo sempre vostro.\n\nSe vuole, posso prepararle una mini-demo testuale su un caso tipico di ${business}.\n\nResto a disposizione,\nVoice Desk`
+      body: `Buongiorno ${person},
+
+per una ${category}${city ? ` a ${city}` : ''}, il punto non è “mettere un robot” davanti ai clienti. Il punto è ordinare il primo contatto, filtrare le richieste ripetitive e lasciare allo staff ciò che richiede attenzione umana.
+
+In pratica: meno dispersione, più continuità e controllo sempre vostro.
+
+${gentleClose}
+
+Resto a disposizione,
+Voice Desk`
     }
 
     if (assistedTemplate === 'close') return {
-      subject: `Mini-demo per ${business}`,
-      body: `Buongiorno ${person},\n\nse per lei ha senso, il passo più semplice non è una riunione lunga: preparo una mini-demo concreta su ${business}, basata su 2 o 3 richieste reali che ricevete spesso.\n\nIn questo modo può valutare subito se Voice Desk può aiutarvi a ${angle}. Se non vede valore, ci fermiamo lì senza impegno.\n\nLe andrebbe bene sentirci 10 minuti oppure preferisce che le mandi prima un esempio scritto?\n\nResto a disposizione,\nVoice Desk`
+      subject: `Passo semplice per ${business}`,
+      body: `Buongiorno ${person},
+
+se per lei ha senso, farei un passo molto semplice: preparo un esempio concreto su ${business}, basato su 2 o 3 richieste tipiche che ricevete spesso.
+
+Così può valutare subito se l’idea è utile. Se non vede valore, ci fermiamo lì senza impegno.
+
+Le andrebbe bene una call breve di 10 minuti oppure preferisce ricevere prima un esempio scritto?
+
+Resto a disposizione,
+Voice Desk`
     }
 
     return {
       subject: `Idea pratica per ${business}`,
-      body: `Buongiorno ${person},\n\nle scrivo perché ho notato ${hook}.\n\nPer una ${category} come ${business}${city ? ` a ${city}` : ''}, spesso il primo contatto con clienti e potenziali clienti si disperde tra telefonate, messaggi, email e richieste ripetitive.\n\nPrima di proporle qualcosa, vorrei capire se questo tema è reale anche per voi: qual è oggi la richiesta che vi fa perdere più tempo o che rischia di restare senza risposta nel momento giusto?\n\nSe ha senso, posso prepararle un esempio molto breve e concreto sul caso di ${business}.\n\nResto a disposizione,\nVoice Desk`
+      body: `Buongiorno ${person},
+
+le scrivo perché ho notato ${guide.hook}.
+
+Per una ${category} come ${business}${city ? ` a ${city}` : ''}, spesso il primo contatto con clienti e potenziali clienti si disperde tra telefonate, messaggi, email e richieste ripetitive.
+
+${valueLine}
+
+Prima di proporle qualcosa, le farei solo una domanda: qual è oggi la richiesta che vi fa perdere più tempo o che rischia di restare senza risposta nel momento giusto?
+
+${gentleClose}
+
+Resto a disposizione,
+Voice Desk`
     }
   }
 
   function buildWhatsAppTemplate(contact: Contact): string {
     const person = contactDisplayName(contact)
     const business = contactBusinessName(contact)
-    const hook = contact.personalizationHook || `il modo in cui ${business} accoglie i clienti`
-    const angle = contact.messageAngle || 'gestire meglio richieste e primi contatti senza automatismi invasivi'
+    const guide = softClosingGuidance(contact)
     const questions = strategicQuestions(contact)
-    const guidedContext = buildGuidedCloserContext(contact)
 
-    if (assistedTemplate === 'diagnose') return `Buongiorno ${person}, sono di Voice Desk. Prima di proporle qualcosa, le faccio una domanda pratica: ${questions[0]} Le capita anche di perdere richieste quando arrivano fuori orario o su canali diversi?`
-    if (assistedTemplate === 'qualify') return `Buongiorno ${person}, per capire se può essere utile a ${business}: quali richieste ripetitive ricevete più spesso e quanto tempo portano via allo staff ogni settimana?`
-    if (assistedTemplate === 'tailored') return `Buongiorno ${person}, prima di farle un preventivo standard preferirei capire la situazione reale di ${business}. ${guidedContext} Oggi pesa di più ridurre costi, gestire richieste/prenotazioni, alleggerire lo staff, valutare energia/bollette o capire se i costi dei servizi possono compensarsi in tutto o in parte con tokenizzazione e risparmi?`
-    if (assistedTemplate === 'position') return `Buongiorno ${person}, da quello che vedo per ${business}, Voice Desk potrebbe aiutare a ${angle}: non sostituisce lo staff, ma ordina il primo contatto e filtra le richieste ripetitive. Vuole che le prepari un esempio concreto?`
-    if (assistedTemplate === 'close') return `Buongiorno ${person}, se ha senso facciamo il passo più semplice: mini-demo di 10 minuti o esempio scritto su ${business}. Così valuta subito se è utile, senza impegno. Cosa preferisce?`
-    return `Buongiorno ${person}, sono di Voice Desk. Ho notato ${hook}. Le faccio solo una domanda: per ${business}, qual è oggi la richiesta dei clienti che fa perdere più tempo o rischia di non ricevere risposta nel momento giusto?`
+    if (assistedTemplate === 'diagnose') return `Buongiorno ${person}, sono di Voice Desk. Le faccio una domanda pratica, senza proposta preconfezionata: ${questions[0]} Se ha senso, le preparo un esempio breve su ${business}.`
+    if (assistedTemplate === 'qualify') return `Buongiorno ${person}, per capire se posso esserle utile su ${business}: da quale canale arrivano più richieste, telefono, email, WhatsApp o sito? E quali portano via più tempo?`
+    if (assistedTemplate === 'tailored') return `Buongiorno ${person}, prima di parlare di soluzioni preferirei capire la situazione reale di ${business}. L’obiettivo sarebbe alleggerire un passaggio concreto: ${guide.likelyNeed}. Vuole che le prepari un esempio molto breve?`
+    if (assistedTemplate === 'position') return `Buongiorno ${person}, l’idea per ${business} non è sostituire lo staff, ma ordinare il primo contatto e filtrare le richieste ripetitive mantenendo controllo umano. Vuole un esempio concreto?`
+    if (assistedTemplate === 'close') return `Buongiorno ${person}, se ha senso facciamo un passo semplice: mini-demo di 10 minuti o esempio scritto su ${business}. Così valuta subito se è utile, senza impegno. Cosa preferisce?`
+    return `Buongiorno ${person}, sono di Voice Desk. Ho notato ${guide.hook}. Le faccio solo una domanda: per ${business}, quale richiesta dei clienti vi fa perdere più tempo o rischia di non ricevere risposta nel momento giusto?`
   }
 
   function setTemporaryAssistedFeedback(message: string) {
@@ -1046,7 +1227,7 @@ Se ci sono dati disponibili, possiamo stimare in modo indicativo capitale social
   }
 
   function askAgent(prompt?: string) { const q = prompt || question; setQuestion(q); setAnswer(agentAnswer(q, contacts, tasks, conversations)) }
-  function switchProfile(profileId: string) { setActiveProfileId(profileId); window.localStorage.setItem(ACTIVE_PROFILE_KEY, profileId); loadProfileData(profileId); resetDraft(); setAnalysis(null); setAnswer('Profilo cambiato. Sto usando solo i dati locali di questo profilo.') }
+  function switchProfile(profileId: string) { setActiveProfileId(profileId); window.localStorage.setItem(ACTIVE_PROFILE_KEY, profileId); loadProfileData(profileId); resetDraft(); setAnalysis(null); setAnswer('Profilo cambiato. Ricarico eventuali dati persistenti dal cloud.'); void loadCloudContacts([]) }
   function createProfile() { const name = newProfileName.trim(); if (!name) return; const timestamp = nowIso(); const newProfile = { id: id('profilo'), name, createdAt: timestamp, updatedAt: timestamp }; setProfiles((current) => [...current, newProfile]); setNewProfileName(''); setActiveProfileId(newProfile.id); window.localStorage.setItem(ACTIVE_PROFILE_KEY, newProfile.id); setContacts([]); setTasks([]); setConversations([]); setSelectedContactId(''); resetDraft(); setAnalysis(null); setAnswer(`Profilo ${name} creato. I dati saranno separati dagli altri profili locali.`) }
   function exportData() { const blob = new Blob([JSON.stringify({ profile: activeProfile, contacts, tasks, conversations }, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `relazione-crm-${activeProfile?.name || 'profilo'}-backup-${today()}.json`.replace(/\s+/g, '-').toLowerCase(); a.click(); URL.revokeObjectURL(url) }
   function importData(event: ChangeEvent<HTMLInputElement>) { const file = event.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => { try { const parsed = JSON.parse(String(reader.result)) as StoredCrmData; const nextContacts = Array.isArray(parsed.contacts) ? parsed.contacts.map(normalizeContact) : []; const nextTasks = Array.isArray(parsed.tasks) ? parsed.tasks : []; const nextConversations = Array.isArray(parsed.conversations) ? parsed.conversations : []; setContacts(nextContacts); setTasks(nextTasks); setConversations(nextConversations); setSelectedContactId(nextContacts[0]?.id || ''); setAnswer('Backup importato nel profilo attivo. Gli altri profili non sono stati modificati.'); } catch { window.alert('Il file selezionato non sembra un backup valido del CRM.') } finally { event.target.value = '' } }; reader.readAsText(file) }
@@ -1059,7 +1240,7 @@ Se ci sono dati disponibili, possiamo stimare in modo indicativo capitale social
 
   const nav = [{ id: 'dashboard', label: 'Dashboard', icon: TrendingUp }, { id: 'contacts', label: 'Database 100', icon: Users }, { id: 'pipeline', label: 'Flusso', icon: ChevronRight }, { id: 'conversations', label: 'Comunicazioni', icon: Upload }, { id: 'research', label: 'Ricerca guidata', icon: Search }, { id: 'study', label: 'Studio su misura', icon: Calculator }, { id: 'mailing', label: 'Mailing CCN', icon: Mail }, { id: 'agent', label: 'Agente', icon: Bot }] as const
 
-  return <div className="min-h-screen bg-[#f7f6f1] text-gray-900"><div className="flex min-h-screen"><aside className="hidden md:flex w-72 flex-col border-r border-stone-200 bg-white/90 p-5"><div className="flex items-center gap-3 mb-8"><div className="w-10 h-10 rounded-2xl bg-blue-100 text-blue-700 flex items-center justify-center font-bold">AI</div><div><div className="font-bold text-lg">RelazioneCRM</div><div className="text-xs text-gray-500">Database privato</div></div></div><nav className="space-y-2">{nav.map((item) => { const Icon = item.icon; return <button key={item.id} onClick={() => setSection(item.id)} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition ${section === item.id ? 'bg-blue-50 text-blue-700 font-semibold' : 'hover:bg-stone-100 text-gray-700'}`}><Icon className="w-4 h-4" /> {item.label}</button> })}</nav><div className="mt-auto rounded-2xl bg-green-50 border border-green-200 p-4 text-sm text-green-900"><strong className="block mb-1">Uso privato gratuito</strong>Database locale per i primi 100 contatti qualificati. Ogni profilo resta separato.</div></aside><main className="flex-1 p-4 md:p-8 max-w-7xl mx-auto w-full"><header className="flex flex-col lg:flex-row lg:items-center gap-4 justify-between mb-8"><div><h1 className="text-3xl font-bold tracking-tight">CRM privato · 100 contatti qualificati</h1><p className="text-gray-500 mt-1">Gestisci lead premium, comunicazioni, follow-up e backup in modalità gratuita local-first.</p></div><div className="flex flex-wrap gap-2">{nav.map((item) => <button key={item.id} onClick={() => setSection(item.id)} className="md:hidden px-3 py-2 rounded-xl border bg-white text-sm">{item.label}</button>)}<button onClick={importMilanoBatch1} className="px-4 py-2 rounded-xl bg-blue-700 text-white hover:bg-blue-800 text-sm inline-flex items-center gap-2"><Database className="w-4 h-4" />Carica Batch Milano 1</button><button onClick={exportData} className="px-4 py-2 rounded-xl border bg-white hover:bg-stone-50 text-sm inline-flex items-center gap-2"><Download className="w-4 h-4" />Backup</button><label className="px-4 py-2 rounded-xl border bg-white hover:bg-stone-50 text-sm inline-flex items-center gap-2 cursor-pointer"><Upload className="w-4 h-4" />Importa<input type="file" accept="application/json" onChange={importData} className="hidden" /></label><button onClick={clearAllData} className="px-4 py-2 rounded-xl border bg-white hover:bg-red-50 text-sm text-red-700 inline-flex items-center gap-2"><Trash2 className="w-4 h-4" />Reset</button></div></header><section className="mb-8 rounded-3xl border bg-white p-5"><div className="flex flex-col xl:flex-row xl:items-end gap-4 justify-between"><div><div className="flex items-center gap-2 text-sm font-semibold text-blue-800"><ShieldCheck className="w-4 h-4" /> Profili separati per te e soci</div><p className="text-gray-600 mt-1">Profilo attivo: <strong>{activeProfile?.name || 'Profilo locale'}</strong>. I dati restano nel browser di questo profilo e non vengono mostrati agli altri profili locali.</p></div><div className="flex flex-col md:flex-row gap-2 md:items-center"><select value={activeProfileId} onChange={(e) => switchProfile(e.target.value)} className="rounded-2xl border px-4 py-3 bg-white min-w-48">{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select><div className="flex gap-2"><input value={newProfileName} onChange={(e) => setNewProfileName(e.target.value)} className="rounded-2xl border px-4 py-3 w-48" placeholder="Nome socio/profilo" /><button onClick={createProfile} className="rounded-2xl bg-blue-700 text-white px-4 py-3 font-semibold hover:bg-blue-800"><UserPlus className="w-4 h-4 inline mr-2" />Crea</button></div></div></div></section>
+  return <div className="min-h-screen bg-[#f7f6f1] text-gray-900"><div className="flex min-h-screen"><aside className="hidden md:flex w-72 flex-col border-r border-stone-200 bg-white/90 p-5"><div className="flex items-center gap-3 mb-8"><div className="w-10 h-10 rounded-2xl bg-blue-100 text-blue-700 flex items-center justify-center font-bold">AI</div><div><div className="font-bold text-lg">RelazioneCRM</div><div className="text-xs text-gray-500">Database privato</div></div></div><nav className="space-y-2">{nav.map((item) => { const Icon = item.icon; return <button key={item.id} onClick={() => setSection(item.id)} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition ${section === item.id ? 'bg-blue-50 text-blue-700 font-semibold' : 'hover:bg-stone-100 text-gray-700'}`}><Icon className="w-4 h-4" /> {item.label}</button> })}</nav><div className="mt-auto rounded-2xl bg-green-50 border border-green-200 p-4 text-sm text-green-900"><strong className="block mb-1">Uso privato operativo</strong>Database cloud se autenticato; fallback locale con backup se il collegamento non è disponibile.</div></aside><main className="flex-1 p-4 md:p-8 max-w-7xl mx-auto w-full"><header className="flex flex-col lg:flex-row lg:items-center gap-4 justify-between mb-8"><div><h1 className="text-3xl font-bold tracking-tight">CRM privato · 100 contatti qualificati</h1><p className="text-gray-500 mt-1">Gestisci lead premium, comunicazioni, follow-up e backup. Se il database è collegato, i contatti restano persistenti dopo ogni riapertura.</p><div className={`mt-3 inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-semibold ${cloudStatus === 'cloud' ? 'bg-green-50 border-green-200 text-green-800' : cloudStatus === 'salvataggio' ? 'bg-blue-50 border-blue-200 text-blue-800' : cloudStatus === 'locale' ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-red-50 border-red-200 text-red-800'}`}><Database className="w-4 h-4" />{cloudMessage}</div></div><div className="flex flex-wrap gap-2">{nav.map((item) => <button key={item.id} onClick={() => setSection(item.id)} className="md:hidden px-3 py-2 rounded-xl border bg-white text-sm">{item.label}</button>)}<button onClick={importMilanoBatch1} className="px-4 py-2 rounded-xl bg-blue-700 text-white hover:bg-blue-800 text-sm inline-flex items-center gap-2"><Database className="w-4 h-4" />Carica Batch Milano 1</button><button onClick={exportData} className="px-4 py-2 rounded-xl border bg-white hover:bg-stone-50 text-sm inline-flex items-center gap-2"><Download className="w-4 h-4" />Backup</button><label className="px-4 py-2 rounded-xl border bg-white hover:bg-stone-50 text-sm inline-flex items-center gap-2 cursor-pointer"><Upload className="w-4 h-4" />Importa<input type="file" accept="application/json" onChange={importData} className="hidden" /></label><button onClick={clearAllData} className="px-4 py-2 rounded-xl border bg-white hover:bg-red-50 text-sm text-red-700 inline-flex items-center gap-2"><Trash2 className="w-4 h-4" />Reset</button></div></header><section className="mb-8 rounded-3xl border bg-white p-5"><div className="flex flex-col xl:flex-row xl:items-end gap-4 justify-between"><div><div className="flex items-center gap-2 text-sm font-semibold text-blue-800"><ShieldCheck className="w-4 h-4" /> Profili separati per te e soci</div><p className="text-gray-600 mt-1">Profilo attivo: <strong>{activeProfile?.name || 'Profilo locale'}</strong>. Con database attivo i contatti vengono ricaricati dal cloud; in modalità locale usa Backup/Importa per non perdere dati.</p></div><div className="flex flex-col md:flex-row gap-2 md:items-center"><select value={activeProfileId} onChange={(e) => switchProfile(e.target.value)} className="rounded-2xl border px-4 py-3 bg-white min-w-48">{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select><div className="flex gap-2"><input value={newProfileName} onChange={(e) => setNewProfileName(e.target.value)} className="rounded-2xl border px-4 py-3 w-48" placeholder="Nome socio/profilo" /><button onClick={createProfile} className="rounded-2xl bg-blue-700 text-white px-4 py-3 font-semibold hover:bg-blue-800"><UserPlus className="w-4 h-4 inline mr-2" />Crea</button></div></div></div></section>
 
 <section className="mb-8 rounded-3xl border bg-white p-5">
   <div className="flex flex-col lg:flex-row lg:items-start gap-5">
@@ -1101,6 +1282,6 @@ Se ci sono dati disponibili, possiamo stimare in modo indicativo capitale social
   {section === 'study' && <div className="space-y-6"><div className="rounded-3xl bg-white border p-5"><div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4"><div><div className="flex items-center gap-3"><Calculator className="w-6 h-6 text-teal-700" /><h2 className="font-bold text-xl">Studio su misura · Tokenizzazione, plafond servizi ed energia</h2></div><p className="text-gray-600 mt-2">Questa sezione non vende un prodotto standard: raccoglie dati patrimoniali, economici e operativi per costruire un preventivo unico, sostenibile e coerente con la situazione reale della persona o dell’azienda.</p></div>{studySavedFeedback && <span className="text-xs rounded-full bg-green-50 text-green-700 px-3 py-1 border border-green-100">{studySavedFeedback}</span>}</div></div><div className="grid lg:grid-cols-[1fr_420px] gap-6"><div className="rounded-3xl bg-white border p-5"><h3 className="font-bold text-lg mb-4">Dati per stima valore e plafond</h3><select value={selectedContact?.id || ''} onChange={(e) => { const c = contacts.find((item) => item.id === e.target.value); setSelectedContactId(e.target.value); if (c) setDraft(draftFromContact(c)) }} className="w-full rounded-2xl border px-4 py-3 mb-4 bg-white"><option value="">Seleziona lead/azienda</option>{contacts.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>{selectedContact ? <div className="space-y-5"><div className="rounded-2xl bg-teal-50 border border-teal-100 p-4 text-sm text-teal-950"><strong>{selectedContact.name}</strong><br />{selectedContact.category || selectedContact.role || 'Categoria non indicata'}{selectedContact.city ? ` · ${selectedContact.city}` : ''}<br /><span className="text-teal-800">Completezza dati studio: {valuationReadiness(selectedContact)}%</span></div><div><h4 className="font-semibold mb-3">Base patrimoniale indicativa</h4><div className="grid md:grid-cols-2 gap-3"><input type="number" value={draft.paidShareCapital || 0} onChange={(e) => setDraft({ ...draft, paidShareCapital: num(e.target.value) })} className="rounded-2xl border px-4 py-3" placeholder="Capitale sociale interamente versato" /><input type="number" value={draft.realEstateValue || 0} onChange={(e) => setDraft({ ...draft, realEstateValue: num(e.target.value) })} className="rounded-2xl border px-4 py-3" placeholder="Valore beni immobili" /><input type="number" value={draft.inventoryValue || 0} onChange={(e) => setDraft({ ...draft, inventoryValue: num(e.target.value) })} className="rounded-2xl border px-4 py-3" placeholder="Magazzino" /><input type="number" value={draft.equipmentValue || 0} onChange={(e) => setDraft({ ...draft, equipmentValue: num(e.target.value) })} className="rounded-2xl border px-4 py-3" placeholder="Impianti, arredi, attrezzature" /><input type="number" value={draft.receivablesValue || 0} onChange={(e) => setDraft({ ...draft, receivablesValue: num(e.target.value) })} className="rounded-2xl border px-4 py-3" placeholder="Crediti e valori esigibili" /><input type="number" value={draft.cashValue || 0} onChange={(e) => setDraft({ ...draft, cashValue: num(e.target.value) })} className="rounded-2xl border px-4 py-3" placeholder="Liquidità disponibile" /><input type="number" value={draft.brandValue || 0} onChange={(e) => setDraft({ ...draft, brandValue: num(e.target.value) })} className="rounded-2xl border px-4 py-3 md:col-span-2" placeholder="Avviamento / brand / valore commerciale stimato" /></div></div><div><h4 className="font-semibold mb-3">Economia attuale e servizi</h4><div className="grid md:grid-cols-2 gap-3"><input type="number" value={draft.annualRevenue || 0} onChange={(e) => setDraft({ ...draft, annualRevenue: num(e.target.value) })} className="rounded-2xl border px-4 py-3" placeholder="Fatturato annuo" /><input type="number" value={draft.annualEbitda || 0} onChange={(e) => setDraft({ ...draft, annualEbitda: num(e.target.value) })} className="rounded-2xl border px-4 py-3" placeholder="EBITDA / margine operativo annuo" /><input type="number" value={draft.annualServiceCost || 0} onChange={(e) => setDraft({ ...draft, annualServiceCost: num(e.target.value) })} className="rounded-2xl border px-4 py-3" placeholder="Costo annuo servizi proposti" /><input type="number" value={draft.annualEnergyCost || 0} onChange={(e) => setDraft({ ...draft, annualEnergyCost: num(e.target.value) })} className="rounded-2xl border px-4 py-3" placeholder="Costo annuo bollette energia" /><input type="number" value={draft.expectedEnergySavingPct || 0} onChange={(e) => setDraft({ ...draft, expectedEnergySavingPct: num(e.target.value) })} className="rounded-2xl border px-4 py-3" placeholder="Risparmio energia stimato %" /><select value={draft.preferredEnergyPath || 'Da valutare'} onChange={(e) => setDraft({ ...draft, preferredEnergyPath: e.target.value as Contact['preferredEnergyPath'] })} className="rounded-2xl border px-4 py-3 bg-white"><option>Da valutare</option><option>uBroker</option><option>PEF Power</option><option>Altro</option></select></div></div><textarea value={draft.studyNotes || ''} onChange={(e) => setDraft({ ...draft, studyNotes: e.target.value })} className="w-full min-h-28 rounded-2xl border p-4" placeholder="Problemi attuali, priorità personali, obiezioni, desideri: es. bollette alte, reception sovraccarica, crescita, liquidità, ristrutturazione, personale, passaggio generazionale..." /><textarea value={draft.servicePlafondNotes || ''} onChange={(e) => setDraft({ ...draft, servicePlafondNotes: e.target.value })} className="w-full min-h-24 rounded-2xl border p-4" placeholder="Plafond servizi da includere: Voice Desk, CRM, automazioni, consulenza, marketing, energia, formazione, partnership..." /><button onClick={saveStudyFromDraft} className="w-full rounded-2xl bg-teal-700 text-white px-4 py-3 font-semibold hover:bg-teal-800"><Save className="w-4 h-4 inline mr-2" />Salva studio nel lead e crea follow-up</button></div> : <p className="text-gray-500">Seleziona un lead per iniziare lo studio personalizzato.</p>}</div><div className="space-y-4">{selectedContact && (() => { const previewContact = { ...selectedContact, ...draft } as Contact; const snap = valuationSnapshot(previewContact); return <><div className="rounded-3xl bg-white border p-5"><h3 className="font-bold text-lg mb-4">Risultato economico indicativo</h3><div className="space-y-3"><div className="rounded-2xl bg-stone-50 p-4"><div className="text-sm text-gray-500">Valore aziendale indicativo</div><div className="text-3xl font-bold">{euro(snap.estimatedCompanyValue)}</div><div className="text-xs text-gray-500 mt-1">Base patrimoniale {euro(snap.assetBase)} + componente redditività {euro(snap.ebitdaComponent)}</div></div><div className="grid grid-cols-2 gap-3"><div className="rounded-2xl bg-blue-50 p-4"><div className="text-xs text-blue-700">2,5% annuo potenziale</div><div className="text-xl font-bold text-blue-950">{euro(snap.annualTokenYield)}</div></div><div className="rounded-2xl bg-green-50 p-4"><div className="text-xs text-green-700">Risparmio energia stimato</div><div className="text-xl font-bold text-green-950">{euro(snap.expectedEnergySaving)}</div></div></div><div className={`rounded-2xl p-4 ${snap.surplusOrGap >= 0 ? 'bg-green-50 text-green-900' : 'bg-amber-50 text-amber-900'}`}><div className="text-sm font-semibold">Copertura rispetto ai servizi</div><div className="text-2xl font-bold">{euro(snap.totalCoverage)} / {euro(snap.annualServiceCost)}</div><div className="text-sm mt-1">{snap.surplusOrGap >= 0 ? `Margine positivo indicativo: ${euro(snap.surplusOrGap)}` : `Gap da coprire o rimodulare: ${euro(Math.abs(snap.surplusOrGap))}`}</div></div></div></div><div className="rounded-3xl bg-white border p-5"><h3 className="font-bold text-lg mb-3">Percorso consulenziale consigliato</h3><p className="text-sm text-gray-700">{tailoredStudyPrompt(previewContact)}</p><div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><strong>Nota operativa:</strong> questa è una simulazione commerciale preliminare, non una perizia, non una consulenza finanziaria regolamentata e non una promessa di rendimento. Serve a costruire un preventivo unico e un percorso coerente con bisogni reali, documenti e verifiche successive.</div></div><div className="rounded-3xl bg-white border p-5"><h3 className="font-bold text-lg mb-3">Domande da fare prima di proporre</h3><div className="space-y-2 text-sm"><div className="rounded-xl border p-3">Quali costi oggi pesano di più: personale, energia, tecnologia, marketing o dispersione richieste?</div><div className="rounded-xl border p-3">Quali beni o valori aziendali sono documentabili: capitale versato, immobili, magazzino, attrezzature, crediti, avviamento?</div><div className="rounded-xl border p-3">Il cliente cerca più liquidità, riduzione costi, crescita commerciale o protezione operativa?</div><div className="rounded-xl border p-3">Sull’energia ha più senso verificare azzeramento bollette, efficientamento, rinegoziazione o percorso uBroker/PEF Power?</div></div></div></> })()}</div></div></div>}
 
   {section === 'mailing' && <div className="space-y-5"><div className="rounded-3xl bg-white border p-5"><div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-5"><div><div className="flex items-center gap-3"><Mail className="w-6 h-6" /><h2 className="font-bold text-xl">Mailing list per CCN/BCC</h2></div><p className="text-sm text-gray-500 mt-2">Genera un elenco email pronto da copiare nel campo <strong>CCN</strong>. Il CRM non invia email: l’invio resta manuale e sotto il tuo controllo.</p></div><button onClick={copyMailingList} disabled={mailingEmails.length === 0} className="rounded-2xl bg-gray-900 text-white px-5 py-3 font-semibold disabled:opacity-40"><Copy className="w-4 h-4 inline mr-2" />{mailingCopied ? 'Copiato' : 'Copia elenco CCN'}</button></div><div className="grid md:grid-cols-4 gap-3 mb-5"><div><label className="text-xs font-semibold text-gray-500">Priorità</label><select value={mailingPriority} onChange={(e) => setMailingPriority(e.target.value as MailingPriorityFilter)} className="mt-1 w-full rounded-2xl border px-4 py-3 bg-white"><option value="Tutte">Tutte</option>{priorityLevels.map((p) => <option key={p} value={p}>Priorità {p}</option>)}</select></div><div><label className="text-xs font-semibold text-gray-500">Stadio comunicazione</label><select value={mailingStage} onChange={(e) => setMailingStage(e.target.value as MailingStageFilter)} className="mt-1 w-full rounded-2xl border px-4 py-3 bg-white"><option value="Tutti">Tutti</option>{outreachStages.map((s) => <option key={s} value={s}>{s}</option>)}</select></div><div><label className="text-xs font-semibold text-gray-500">Separatore</label><select value={mailingSeparator} onChange={(e) => setMailingSeparator(e.target.value as MailingSeparator)} className="mt-1 w-full rounded-2xl border px-4 py-3 bg-white"><option value="punto e virgola">Punto e virgola</option><option value="virgola">Virgola</option></select></div><div className="rounded-2xl bg-stone-50 p-4"><div className="text-xs text-gray-500">Email selezionate</div><div className="text-2xl font-bold">{mailingEmails.length}</div><div className="text-xs text-gray-500">Escluse senza email valida: {excludedEmailCount}</div></div></div><textarea readOnly value={mailingText || 'Nessuna email valida con i filtri attuali.'} className="w-full min-h-36 rounded-2xl border p-4 bg-stone-50 text-sm" /><div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><strong>Uso consigliato:</strong> incolla questo elenco nel campo CCN/BCC, non nel campo A. Per ridurre spam e blocchi, invia piccoli gruppi, personalizza il testo e registra poi la comunicazione nella sezione Comunicazioni.</div></div><div className="grid md:grid-cols-2 xl:grid-cols-3 gap-3">{mailingContacts.map((contact) => <div key={contact.id} className="rounded-2xl bg-white border p-4"><div className="flex items-start justify-between gap-3"><div><div className="font-semibold">{contact.name}</div><div className="text-sm text-gray-500">{contact.category || contact.role || 'Categoria non indicata'} · Priorità {contact.priorityLevel || 'B'}</div></div><span className="text-xs rounded-full bg-blue-50 text-blue-700 px-2 py-1">{contact.outreachStage || 'Da qualificare'}</span></div><div className="mt-3 text-sm font-medium text-gray-800 break-all">{contactEmail(contact)}</div><div className="mt-2 text-xs text-gray-500">{contact.personalizationHook || contact.messageAngle || 'Completa gancio e angolo prima dell’invio se vuoi una mail più efficace.'}</div></div>)}</div>{mailingContacts.length === 0 && <div className="rounded-3xl bg-white border p-6 text-gray-500">Nessun contatto con email valida nei filtri selezionati. Completa i campi email nel Database 100 oppure allarga i filtri.</div>}</div>}
-  {section === 'agent' && <div className="rounded-3xl bg-white border p-5 max-w-4xl"><div className="flex items-center gap-3 mb-5"><Bot className="w-6 h-6" /><h2 className="font-bold text-xl">Agente operativo sui tuoi dati</h2></div><div className="rounded-2xl bg-stone-50 p-5 mb-4"><p>{answer}</p></div><div className="flex gap-3"><input value={question} onChange={(e) => setQuestion(e.target.value)} className="flex-1 rounded-2xl border px-4 py-3" placeholder="Es: chi devo contattare oggi? a che punto sono i 100 contatti?" /><button onClick={() => askAgent()} className="rounded-2xl bg-gray-900 text-white px-5 font-semibold"><Send className="w-4 h-4 inline mr-2" />Invia</button></div><div className="flex flex-wrap gap-2 mt-4">{['Chi devo contattare oggi?', 'A che punto sono i 100 contatti?', 'Quali lead sono caldi?', 'Mostrami i task aperti', 'Riassumi le conversazioni', 'Prepara studio tokenizzazione e plafond', 'Valuta energia e bollette'].map((p) => <button key={p} onClick={() => askAgent(p)} className="rounded-xl border px-3 py-2 text-sm hover:bg-stone-50"><MessageSquareText className="w-3 h-3 inline mr-1" />{p}</button>)}</div><div className="mt-6 rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900"><Database className="w-4 h-4 inline mr-2" />In questa versione gratuita l’agente usa regole locali e solo i dati del profilo attivo. Per sincronizzazione tra dispositivi o invii automatici reali si potrà aggiungere un database cloud in seguito.</div></div>}
+  {section === 'agent' && <div className="rounded-3xl bg-white border p-5 max-w-4xl"><div className="flex items-center gap-3 mb-5"><Bot className="w-6 h-6" /><h2 className="font-bold text-xl">Agente operativo sui tuoi dati</h2></div><div className="grid md:grid-cols-3 gap-3 mb-4"><div><label className="text-xs font-semibold text-gray-500">Tono vendita</label><select value={salesTone} onChange={(e) => setSalesTone(e.target.value as SalesTone)} className="mt-1 w-full rounded-2xl border px-4 py-3 bg-white">{salesTones.map((tone) => <option key={tone} value={tone}>{tone}</option>)}</select></div><div><label className="text-xs font-semibold text-gray-500">Obiettivo</label><select value={strategicIntent} onChange={(e) => setStrategicIntent(e.target.value as StrategicIntent)} className="mt-1 w-full rounded-2xl border px-4 py-3 bg-white">{strategicIntents.map((intent) => <option key={intent} value={intent}>{intent}</option>)}</select></div><div><label className="text-xs font-semibold text-gray-500">Template</label><select value={assistedTemplate} onChange={(e) => setAssistedTemplate(e.target.value as CommunicationTemplate)} className="mt-1 w-full rounded-2xl border px-4 py-3 bg-white"><option value="opener">Opener soft</option><option value="diagnose">Diagnosi</option><option value="qualify">Qualifica</option><option value="tailored">Su misura</option><option value="position">Posizionamento</option><option value="close">Closing morbido</option></select></div></div><div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 mb-4 text-sm text-blue-900"><strong>Coach strategico:</strong> {strategicCoachNote(selectedContact || undefined)}</div><div className="rounded-2xl bg-stone-50 p-5 mb-4 whitespace-pre-wrap"><p>{answer}</p></div><div className="flex gap-3"><input value={question} onChange={(e) => setQuestion(e.target.value)} className="flex-1 rounded-2xl border px-4 py-3" placeholder="Es: chi devo contattare oggi? a che punto sono i 100 contatti?" /><button onClick={() => askAgent()} className="rounded-2xl bg-gray-900 text-white px-5 font-semibold"><Send className="w-4 h-4 inline mr-2" />Invia</button></div><div className="flex flex-wrap gap-2 mt-4">{['Chi devo contattare oggi?', 'A che punto sono i 100 contatti?', 'Quali lead sono caldi?', 'Mostrami i task aperti', 'Riassumi le conversazioni', 'Genera messaggio soft closing', 'Prepara WhatsApp cordiale', 'Gestisci obiezione senza pressione', 'Prepara studio tokenizzazione e plafond', 'Valuta energia e bollette'].map((p) => <button key={p} onClick={() => askAgent(p)} className="rounded-xl border px-3 py-2 text-sm hover:bg-stone-50"><MessageSquareText className="w-3 h-3 inline mr-1" />{p}</button>)}</div><div className="mt-6 rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900"><Database className="w-4 h-4 inline mr-2" />In questa versione gratuita l’agente usa regole locali e solo i dati del profilo attivo. Per sincronizzazione tra dispositivi o invii automatici reali si potrà aggiungere un database cloud in seguito.</div></div>}
   </main></div></div>
 }
