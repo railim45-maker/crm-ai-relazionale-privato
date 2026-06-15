@@ -9,6 +9,32 @@ export type PublicReference = {
   caution: string
 }
 
+
+export type ProfessionalCloserStep = 'opener' | 'diagnose' | 'qualify' | 'tailored' | 'position' | 'appointment' | 'close' | 'follow_up' | 'objection'
+
+export type ProfessionalCloserOptions = {
+  step?: ProfessionalCloserStep | 'auto'
+  tone?: 'Cordiale' | 'Soft' | 'Consulenziale' | 'Diretto gentile' | string
+  intent?: string
+  objection?: string
+  lastReply?: string
+}
+
+export type ProfessionalCloserPlaybook = {
+  step: ProfessionalCloserStep
+  stageLabel: string
+  principle: string
+  nextMove: string
+  followUpDays: number
+  suggestedStage: string
+  message: string
+  whatsapp: string
+  appointmentProposal: string
+  objectionResponse: string
+  internalNote: string
+  checklist: string[]
+}
+
 export type ConsultingContact = {
   first_name?: string
   last_name?: string
@@ -152,6 +178,147 @@ export function countPublicReferences(contact: ConsultingContact) {
   return { verified, sourceLines, missing, score, label: score >= 75 ? 'Alta' : score >= 45 ? 'Media' : 'Bassa' }
 }
 
+
+const PROFESSIONAL_CLOSER_STAGES: Record<ProfessionalCloserStep, { label: string; principle: string; nextMove: string; followUpDays: number; suggestedStage: string }> = {
+  opener: {
+    label: 'Primo contatto soft',
+    principle: 'Aprire una relazione con un dettaglio specifico e una domanda semplice, senza proporre subito una soluzione.',
+    nextMove: 'Inviare un messaggio breve, attendere una risposta reale e non sovraccaricare il lead di informazioni.',
+    followUpDays: 3,
+    suggestedStage: 'Primo invio',
+  },
+  diagnose: {
+    label: 'Diagnosi del bisogno',
+    principle: 'Capire dove il lead perde tempo, margine o continuità prima di parlare di prodotto.',
+    nextMove: 'Fare una domanda concreta sul processo più ripetitivo o sul collo di bottiglia attuale.',
+    followUpDays: 2,
+    suggestedStage: 'Risposta ricevuta',
+  },
+  qualify: {
+    label: 'Qualificazione commerciale',
+    principle: 'Verificare frequenza, urgenza, canale, decisore e impatto economico del problema.',
+    nextMove: 'Chiedere tre informazioni leggere e trasformare la risposta in un prossimo passo misurabile.',
+    followUpDays: 2,
+    suggestedStage: 'Risposta ricevuta',
+  },
+  tailored: {
+    label: 'Valore su misura',
+    principle: 'Mostrare comprensione del contesto e proporre un esempio pratico, non un preventivo generico.',
+    nextMove: 'Preparare un esempio testuale o una mini-demo basata su 2-3 richieste tipiche del lead.',
+    followUpDays: 3,
+    suggestedStage: 'Video da preparare',
+  },
+  position: {
+    label: 'Posizionamento soluzione',
+    principle: 'Collegare il problema emerso a un beneficio operativo concreto, mantenendo controllo umano e zero pressione.',
+    nextMove: 'Spiegare il risultato atteso in una frase e chiedere se il lead vuole vedere un caso pratico.',
+    followUpDays: 3,
+    suggestedStage: 'Follow-up 1',
+  },
+  appointment: {
+    label: 'Appuntamento guidato',
+    principle: 'Portare il lead a una micro-decisione reversibile: call breve o esempio scritto.',
+    nextMove: 'Proporre due opzioni semplici e lasciare scelta al lead, evitando urgenze artificiali.',
+    followUpDays: 1,
+    suggestedStage: 'Demo richiesta',
+  },
+  close: {
+    label: 'Closing morbido',
+    principle: 'Chiedere il prossimo passo solo dopo aver chiarito valore, rischio percepito e semplicità di partenza.',
+    nextMove: 'Confermare il problema, proporre un test piccolo e fissare data o modalità del confronto.',
+    followUpDays: 1,
+    suggestedStage: 'Demo richiesta',
+  },
+  follow_up: {
+    label: 'Follow-up non invasivo',
+    principle: 'Riprendere il filo dando valore o semplificando la risposta, senza sensi di colpa e senza pressione.',
+    nextMove: 'Inviare una sola frase utile più una domanda a risposta facile.',
+    followUpDays: 4,
+    suggestedStage: 'Follow-up 1',
+  },
+  objection: {
+    label: 'Gestione obiezione',
+    principle: 'Accogliere il dubbio, togliere pressione e proporre un passo piccolo per ridurre rischio e incertezza.',
+    nextMove: 'Rispondere con empatia, chiarire il punto critico e offrire esempio o call breve senza impegno.',
+    followUpDays: 2,
+    suggestedStage: 'Risposta ricevuta',
+  },
+}
+
+function firstMeaningfulLine(value?: string) {
+  return String(value || '').split(/\n|;/).map((line) => line.trim()).filter(Boolean)[0] || ''
+}
+
+function inferObjectionKind(text?: string) {
+  const lower = String(text || '').toLowerCase()
+  if (/(cost|prezz|budget|caro|troppo|investimento)/.test(lower)) return 'price'
+  if (/(non.*tempo|ora|adesso|periodo|rimand|più avanti|non è il momento)/.test(lower)) return 'timing'
+  if (/(già|fornitore|internamente|abbiamo già|ci pensa)/.test(lower)) return 'already'
+  if (/(dubbi|fid|sicurezza|privacy|robot|automat)/.test(lower)) return 'trust'
+  if (/(non interessa|non ci serve|no grazie)/.test(lower)) return 'no_interest'
+  return 'generic'
+}
+
+export function inferProfessionalCloserStep(contact: ConsultingContact, options: ProfessionalCloserOptions = {}): ProfessionalCloserStep {
+  if (options.step && options.step !== 'auto') return options.step as ProfessionalCloserStep
+  if (options.objection || options.lastReply) {
+    const text = `${options.objection || ''} ${options.lastReply || ''}`.trim()
+    if (/(cost|prezz|budget|caro|tempo|rimand|dubbi|non interessa|non ora|già|fornitore)/i.test(text)) return 'objection'
+  }
+  const stage = String(contact.outreach_stage || '').toLowerCase()
+  if (stage.includes('demo')) return 'appointment'
+  if (stage.includes('risposta')) return 'diagnose'
+  if (stage.includes('follow')) return 'follow_up'
+  if (stage.includes('video')) return 'tailored'
+  if (stage.includes('primo')) return 'diagnose'
+  if (stage.includes('ricerca')) return 'opener'
+  return 'opener'
+}
+
+export function buildProfessionalCloserPlaybook(contact: ConsultingContact, options: ProfessionalCloserOptions = {}): ProfessionalCloserPlaybook {
+  const step = inferProfessionalCloserStep(contact, options)
+  const meta = PROFESSIONAL_CLOSER_STAGES[step]
+  const person = contactDisplayName(contact)
+  const company = businessName(contact)
+  const hook = contact.personalization_hook || `il modo in cui ${company} gestisce il primo contatto con clienti e richieste`
+  const likelyNeed = firstMeaningfulLine(contact.probable_needs) || 'capire quali richieste ripetitive o passaggi commerciali assorbono più tempo'
+  const path = firstMeaningfulLine(contact.recommended_path) || 'partire da una mini-diagnosi e poi mostrare un esempio pratico solo se emerge valore'
+  const questions = String(contact.recommended_questions || '').split(/\n|;/).map((x) => x.trim()).filter(Boolean)
+  const diagnosticQuestion = questions[0] || `per ${company}, quale richiesta dei clienti vi fa perdere più tempo o rischia di restare senza risposta nel momento giusto?`
+  const tone = options.tone || 'Soft'
+  const objectionKind = inferObjectionKind(`${options.objection || ''} ${options.lastReply || ''}`)
+  const objectionMap: Record<string, string> = {
+    price: `Capisco perfettamente il tema del costo. Infatti non partirei da un impegno: prima verificherei se esiste un passaggio che oggi fa perdere tempo o opportunità. Se il beneficio non è chiaro, ci fermiamo lì.`,
+    timing: `Ha senso, non voglio aggiungere pressione in un momento pieno. Le proporrei solo un passaggio leggero: mi manda il punto che oggi vi pesa di più e le preparo un esempio scritto, così lo valuta quando ha spazio.`,
+    already: `Ottimo, se avete già una gestione interna meglio ancora. Il mio punto non è sostituirla, ma capire se c’è un piccolo collo di bottiglia ripetitivo che si può alleggerire lasciando controllo a voi.`,
+    trust: `È un dubbio corretto. Per questo lavorerei prima su un esempio limitato e controllabile, senza dati sensibili e senza automatismi verso il cliente finché non siete voi a validare il tono.`,
+    no_interest: `La ringrazio, nessun problema. Le lascio solo questa domanda per il futuro: se un giorno volesse alleggerire una parte ripetitiva del primo contatto, quale sarebbe la prima da guardare?`,
+    generic: `La capisco. Prima di insistere preferisco capire il punto: il dubbio riguarda priorità, costo, fiducia nello strumento o mancanza di tempo? In base a quello le rispondo in modo preciso, senza forzare.`
+  }
+
+  const opener = `Buongiorno ${person}, le scrivo perché ho notato ${hook}. Le faccio solo una domanda pratica: ${diagnosticQuestion} Se ha senso, posso prepararle un esempio molto breve e concreto, senza impegno.`
+  const diagnose = `Buongiorno ${person}, prima di proporle qualsiasi cosa preferisco capire bene il contesto. Oggi per ${company} pesa di più gestire richieste ripetitive, rispondere nei momenti di picco, fare follow-up o qualificare meglio i contatti? Mi basta una risposta breve: poi le dico se vedo un margine reale oppure no.`
+  const qualify = `Buongiorno ${person}, per capire se posso esserle utile le chiederei tre cose rapide: da quale canale arrivano più richieste, quali si ripetono spesso e quale passaggio vorrebbe alleggerire senza perdere controllo umano. Da lì preparo un esempio pratico, non un preventivo standard.`
+  const tailored = `Buongiorno ${person}, per ${company} non partirei da una proposta preconfezionata. Il punto utile sembra questo: ${likelyNeed}. Il percorso più sensato è ${path}. Se vuole, preparo un esempio su 2-3 richieste tipiche e lo valuta con calma.`
+  const position = `Buongiorno ${person}, l’idea non è mettere distanza tra voi e i clienti. È il contrario: ordinare il primo contatto, filtrare ciò che è ripetitivo e lasciare allo staff ciò che richiede attenzione umana. Se le torna, le mostro un esempio concreto su ${company}.`
+  const appointment = `Buongiorno ${person}, se per lei ha senso farei un passo molto semplice: 10 minuti di call oppure un esempio scritto su ${company}. Così vede subito se c’è valore; se non lo vede, ci fermiamo lì senza impegno. Quale delle due opzioni preferisce?`
+  const close = `Buongiorno ${person}, da quello che abbiamo raccolto il punto da verificare è ${likelyNeed}. Le propongo una prova piccola e controllata: definiamo insieme un caso reale, preparo l’esempio e poi decidiamo se procedere. Ha più senso sentirci domani o ricevere prima una bozza scritta?`
+  const followUp = `Buongiorno ${person}, mi ricollego al messaggio precedente senza urgenza. Per semplificarle la risposta: se oggi dovesse scegliere un solo punto da alleggerire nel primo contatto di ${company}, quale sarebbe? Da lì capisco se vale la pena prepararle un esempio o se lasciamo perdere.`
+  const objectionResponse = objectionMap[objectionKind]
+  const messageByStep: Record<ProfessionalCloserStep, string> = { opener, diagnose, qualify, tailored, position, appointment, close, follow_up: followUp, objection: objectionResponse }
+  const message = messageByStep[step]
+  const whatsapp = message.replace(/\s+/g, ' ').trim()
+  const appointmentProposal = `Opzione A: call di 10 minuti per capire il caso reale. Opzione B: esempio scritto su ${company} da valutare senza impegno.`
+  const checklist = [
+    'Usare un solo gancio specifico e verificabile.',
+    'Fare una domanda concreta prima della proposta.',
+    'Non citare fonti interne, conteggi o simulazioni economiche nel messaggio al lead.',
+    'Registrare risposta, stadio, prossimo follow-up e obiezione nel CRM.',
+  ]
+  const internalNote = `Step ${meta.label}. Tono richiesto: ${tone}. Intento: ${options.intent || meta.nextMove}. Bisogno da verificare: ${likelyNeed}. Prossimo follow-up consigliato tra ${meta.followUpDays} giorni.`
+  return { step, stageLabel: meta.label, principle: meta.principle, nextMove: meta.nextMove, followUpDays: meta.followUpDays, suggestedStage: meta.suggestedStage, message, whatsapp, appointmentProposal, objectionResponse, internalNote, checklist }
+}
+
 export function buildGuidedResearch(contact: ConsultingContact) {
   const counts = countPublicReferences(contact)
   const name = businessName(contact)
@@ -187,15 +354,8 @@ export function buildLeadValueNote(contact: ConsultingContact): string {
   return `Per ${company}, ${valueParts.join('. ')}.`
 }
 
-export function buildCloserMessage(contact: ConsultingContact, step: 'opener' | 'diagnose' | 'tailored' | 'close' = 'opener') {
-  const person = contactDisplayName(contact)
-  const company = businessName(contact)
-  const hook = contact.personalization_hook || `il modo in cui ${company} si presenta ai clienti`
-  const valueNote = buildLeadValueNote(contact)
-  if (step === 'diagnose') return `Buongiorno ${person}, prima di proporle qualcosa preferisco farle una domanda concreta. Ho visto ${hook}. Oggi per ${company} pesa di più gestire richieste ripetitive, ridurre costi, alleggerire lo staff, migliorare il primo contatto o valutare energia/servizi?`
-  if (step === 'tailored') return `Buongiorno ${person}, le scrivo con un taglio molto pratico e senza proposta preconfezionata. ${valueNote} Se vuole, partiamo da 10 minuti di diagnosi: se emerge qualcosa di utile le preparo un esempio concreto, altrimenti ci fermiamo lì.`
-  if (step === 'close') return `Buongiorno ${person}, se ha senso facciamo un passo semplice: mini-demo o esempio scritto su ${company}, basato su 2-3 richieste reali. Se non vede valore, ci fermiamo lì. Preferisce call breve o esempio via email?`
-  return `Buongiorno ${person}, le scrivo perché ho notato ${hook}. Per ${company}, qual è oggi la richiesta dei clienti che fa perdere più tempo o rischia di restare senza risposta nel momento giusto? Se ha senso, preparo un esempio molto breve e concreto.`
+export function buildCloserMessage(contact: ConsultingContact, step: ProfessionalCloserStep = 'opener') {
+  return buildProfessionalCloserPlaybook(contact, { step }).message
 }
 
 export function ruleBasedAgentAnswer(query: string, contacts: ConsultingContact[] = []) {
@@ -204,6 +364,9 @@ export function ruleBasedAgentAnswer(query: string, contacts: ConsultingContact[
   const ranked = contacts.slice().sort((a, b) => (toNumber(b.interest_level) + toNumber(b.trust_level) + toNumber(b.potential_value) / 1000) - (toNumber(a.interest_level) + toNumber(a.trust_level) + toNumber(a.potential_value) / 1000))
   const top = ranked[0]
   if (lower.includes('studio') || lower.includes('energia') || lower.includes('token')) return buildConsultingStudy(top)
+  if (lower.includes('obiez')) return buildProfessionalCloserPlaybook(top, { step: 'objection', lastReply: query }).message
+  if (lower.includes('appuntament') || lower.includes('call') || lower.includes('demo') || lower.includes('chiud')) return buildProfessionalCloserPlaybook(top, { step: 'appointment' }).message
+  if (lower.includes('follow')) return buildProfessionalCloserPlaybook(top, { step: 'follow_up' }).message
   if (lower.includes('messaggio') || lower.includes('closer') || lower.includes('whatsapp') || lower.includes('email') || lower.includes('mail')) return buildCloserMessage(top, lower.includes('email') || lower.includes('mail') ? 'tailored' : 'diagnose')
   if (lower.includes('font') || lower.includes('contegg')) {
     const c = buildGuidedResearch(top)

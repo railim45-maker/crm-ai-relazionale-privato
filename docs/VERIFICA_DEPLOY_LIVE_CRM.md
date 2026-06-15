@@ -60,3 +60,48 @@ La build Next.js risulta completata correttamente e include le route operative p
 ## Istruzioni essenziali per il nuovo deploy
 
 Dopo aver caricato questo pacchetto aggiornato su Vercel, verificare in ordine: aprire `/auth/login`, accedere con l’utente previsto, aprire `/demo`, controllare lo stato in alto della persistenza e inserire un lead di prova. Se dopo refresh il lead resta visibile, il CRM è operativo come strumento di lavoro. Se compare modalità locale o errore database, non importare liste grandi finché non sono configurate correttamente le variabili Supabase nel progetto Vercel.
+
+
+## Verifica aggiuntiva login dopo segnalazione utente
+
+La route `https://crm-ai-relazionale-privato-3a1uqgu1x-railims-projects.vercel.app/auth/login` non risulta semplicemente assente: restituisce un errore **500: INTERNAL_SERVER_ERROR** con codice `MIDDLEWARE_INVOCATION_FAILED`. Questo indica che nel deploy attuale esiste un problema a livello middleware/runtime, probabilmente collegato a configurazione ambiente o logica di protezione route, e spiega perché l’utente non riesce a vedere i controlli richiesti.
+
+
+### Diagnosi tecnica middleware
+
+Il file locale `middleware.ts` crea sempre il client Supabase server-side tramite `createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, ...)`. Le non-null assertion TypeScript (`!`) rimuovono solo l’errore di compilazione, ma non impediscono che a runtime Vercel riceva valori `undefined` se le variabili non sono configurate. In quel caso il middleware può fallire prima di servire anche `/auth/login`, generando `MIDDLEWARE_INVOCATION_FAILED`.
+
+La soluzione corretta è rendere il middleware **fail-safe**: se la configurazione Supabase pubblica non è disponibile, deve lasciar passare la richiesta senza creare alcun client server-side. In questa modalità il CRM resta accessibile in modalità local-first, mentre il login cloud e la persistenza Supabase saranno attivabili appena Vercel avrà le variabili ambiente necessarie.
+
+
+## Implementazione applicata: assistente closer professionale e fix `/auth/login`
+
+È stata applicata una correzione al `middleware.ts` per rendere l’autenticazione **fail-safe** quando le variabili Supabase non sono ancora configurate nel deploy. Prima il middleware usava variabili forzate con `!`; su un ambiente Vercel incompleto questo può impedire il caricamento corretto delle route protette e rendere invisibile anche `/auth/login`. Ora il middleware verifica `NEXT_PUBLIC_SUPABASE_URL` e `NEXT_PUBLIC_SUPABASE_ANON_KEY`; se mancano, lascia passare la richiesta invece di causare errore server.
+
+È stato inoltre implementato un framework di **professional closer playbook** in `lib/consulting-intelligence.ts`. Il framework determina automaticamente lo step commerciale più adatto in base allo stadio del lead e alla risposta ricevuta, distinguendo apertura, diagnosi, qualificazione, valore su misura, posizionamento, appuntamento, closing morbido, follow-up e gestione obiezioni. Per ogni step produce messaggio, WhatsApp compatto, prossima mossa, principio commerciale, giorni consigliati per follow-up, stadio suggerito, risposta a obiezione e checklist interna.
+
+La route `/api/ai/consulting` ora supporta l’azione `playbook`, oltre a `references`, `research`, `study` e `message`. Questo permette di interrogare il motore closer in modo strutturato da interfaccia o future integrazioni, senza costi AI esterni e senza invio automatico di comunicazioni.
+
+La sezione `/demo` denominata **Agente closer operativo sui tuoi dati** ora mostra un pannello strategico con stadio conversazione, prossima mossa, follow-up consigliato, gestione obiezioni, email suggerita, WhatsApp suggerito, pulsanti di copia/apertura manuale, marcatura invio e programmazione follow-up. L’obiettivo è trasformare il CRM in un assistente commerciale operativo che guidi il closing, senza sostituire il controllo umano.
+
+### Verifiche eseguite in locale
+
+| Controllo | Esito |
+|---|---:|
+| `npm run type-check` | Superato |
+| `npm run build` | Superato |
+| Route build `/auth/login` | Presente nella build Next.js |
+| HTTP locale `GET /auth/login` | `200 OK` |
+| HTTP locale `GET /demo` con Supabase configurato | `307` verso `/auth/login?redirect=%2Fdemo`, comportamento atteso |
+| API locale `POST /api/ai/consulting` con `action: playbook` | Risponde con step `objection`, prossima mossa e follow-up |
+
+### Nota operativa sul deploy live
+
+Se sul dominio pubblico `/auth/login` continua a non aprirsi, il deploy live non sta ancora usando questo codice aggiornato. È necessario redeployare il repository o caricare il pacchetto rigenerato. Dopo il redeploy, il controllo minimo è aprire direttamente:
+
+```text
+https://TUO-DOMINIO/auth/login
+https://TUO-DOMINIO/demo
+```
+
+`/auth/login` deve rispondere con la pagina di accesso. `/demo`, se Supabase è configurato, deve reindirizzare al login quando non sei autenticato; se Supabase non è configurato, deve comunque caricare senza errore server grazie al middleware fail-safe.
