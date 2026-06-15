@@ -1,31 +1,21 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
-import { createServerClient } from '@supabase/ssr'
 
-export async function middleware(request: NextRequest) {
-  let response = NextResponse.next({ request })
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll: () => request.cookies.getAll(),
-        setAll: (cookiesToSet: { name: string; value: string; options?: any }[]) => {
-          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value))
-          response = NextResponse.next({ request })
-          cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options))
-        },
-      },
-    }
-  )
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user && request.nextUrl.pathname.startsWith('/dashboard')) {
-    return NextResponse.redirect(new URL('/auth/login', request.url))
-  }
-  if (user && request.nextUrl.pathname.startsWith('/auth')) {
-    return NextResponse.redirect(new URL('/dashboard', request.url))
-  }
-  return response
+/**
+ * Middleware minimale di emergenza per Vercel.
+ *
+ * Questo file serve a risolvere l'errore:
+ * 500: INTERNAL_SERVER_ERROR
+ * Code: MIDDLEWARE_INVOCATION_FAILED
+ *
+ * Non importa Supabase, non legge variabili ambiente, non legge cookie
+ * e non esegue logiche asincrone. In questo modo il middleware non può
+ * bloccare /auth/login prima che la pagina venga servita.
+ */
+export function middleware(_request: NextRequest) {
+  return NextResponse.next()
 }
 
-export const config = { matcher: ['/dashboard/:path*', '/auth/:path*'] }
+export const config = {
+  matcher: ['/dashboard/:path*', '/demo/:path*', '/auth/:path*'],
+}
