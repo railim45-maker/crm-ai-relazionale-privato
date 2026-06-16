@@ -1,0 +1,1 @@
+Il file middleware.ts è stato rimosso intenzionalmente per eliminare MIDDLEWARE_INVOCATION_FAILED su Vercel. Non ricrearlo prima del redeploy.
