@@ -565,6 +565,12 @@ export default function DemoAppPage() {
         setCloudMessage('Accesso non effettuato: i dati restano solo nel browser. Per ritrovarli ogni giorno, accedi al CRM e collega il database.')
         return
       }
+      if (response.status === 503) {
+        setCloudStatus('locale')
+        setCloudReady(false)
+        setCloudMessage('Modalità locale attiva: Supabase non è ancora configurato con chiavi reali. I dati restano nel browser; usa Backup prima di chiudere.')
+        return
+      }
       if (!response.ok) throw new Error('Database non disponibile')
       const payload = await response.json()
       const cloudContacts = Array.isArray(payload.contacts) ? payload.contacts.map(normalizeContact) : []
@@ -594,23 +600,35 @@ export default function DemoAppPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ contacts: snapshot }),
       })
+      const rawPayload = await response.text()
+      let payload: any = {}
+      try { payload = rawPayload ? JSON.parse(rawPayload) : {} } catch { payload = { error: rawPayload } }
+      const apiMessage = String(payload?.message || payload?.error || '').trim()
+      const partialErrors = Array.isArray(payload?.errors) ? payload.errors.filter(Boolean).slice(0, 2).join(' · ') : ''
+
       if (response.status === 401) {
         setCloudStatus('locale')
         setCloudReady(false)
-        setCloudMessage('Non sei autenticato: modifiche salvate solo nel browser. Accedi per renderle persistenti.')
+        setCloudMessage(apiMessage || 'Non sei autenticato: modifiche salvate solo nel browser. Accedi per renderle persistenti.')
         return
       }
-      if (!response.ok && response.status !== 207) throw new Error('Sincronizzazione fallita')
-      const payload = await response.json()
+      if (response.status === 503) {
+        setCloudStatus('locale')
+        setCloudReady(false)
+        setCloudMessage(apiMessage || 'Cloud non configurato: modifiche salvate nel browser. Inserisci URL, anon key e service role Supabase reali nel deploy.')
+        return
+      }
+      if (!response.ok && response.status !== 207) throw new Error(apiMessage || `Sincronizzazione fallita con stato ${response.status}`)
+
       const saved = Array.isArray(payload.saved) ? payload.saved.map(normalizeContact) : []
       if (saved.length > 0) setContacts(saved)
       setCloudStatus(response.status === 207 ? 'errore' : 'cloud')
       setCloudReady(response.status !== 207)
-      setCloudMessage(response.status === 207 ? 'Sincronizzazione parziale: alcuni contatti non sono stati salvati. Esegui Backup prima di chiudere.' : `Salvato sul database persistente: ${saved.length || snapshot.length} contatti.`)
-    } catch {
-      setCloudStatus('errore')
+      setCloudMessage(response.status === 207 ? `Sincronizzazione parziale: ${partialErrors || 'alcuni contatti non sono stati salvati'}. Esegui Backup prima di chiudere.` : `Salvato sul database persistente: ${saved.length || snapshot.length} contatti.`)
+    } catch (error: any) {
+      setCloudStatus('locale')
       setCloudReady(false)
-      setCloudMessage('Errore di salvataggio cloud: dati mantenuti localmente. Esporta un backup prima di chiudere.')
+      setCloudMessage(`Cloud non raggiungibile: dati mantenuti localmente. Motivo: ${error?.message || 'errore di rete o configurazione'}. Esporta un backup prima di chiudere.`)
     }
   }
 
@@ -1412,3 +1430,4 @@ Voice Desk`
   <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 border-t bg-white/95 backdrop-blur px-2 pt-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] grid grid-cols-4 gap-1">{[{ id: 'dashboard', label: 'Home', icon: TrendingUp }, { id: 'contacts', label: 'Lead', icon: Users }, { id: 'conversations', label: 'Messaggi', icon: MessageSquareText }, { id: 'agent', label: 'Agente', icon: Bot }].map((item) => { const Icon = item.icon; return <button key={item.id} onClick={() => setSection(item.id as Section)} className={`rounded-2xl px-2 py-2 text-[11px] font-semibold flex flex-col items-center gap-1 ${section === item.id ? 'bg-blue-50 text-blue-700' : 'text-gray-600'}`}><Icon className="w-4 h-4" />{item.label}</button> })}</nav></main></div></div>
   )
 }
+Come generare deliverable passo dopo passo - Manus
