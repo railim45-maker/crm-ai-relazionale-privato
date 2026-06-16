@@ -1,67 +1,94 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient, createAdminClient } from '@/lib/supabase'
 import { dbContactToDemo, demoContactToDb } from '@/lib/demo-crm-mapping'
+import { hasUsableAdminSupabaseConfig } from '@/lib/supabase-config'
 
 function hasUuidShape(value: unknown) {
-  return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+  return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i.test(value)
+}
+
+function contactLabel(contact: any) {
+  return String(contact?.name || contact?.company || contact?.email || contact?.id || 'contatto senza nome')
 }
 
 export async function POST(req: NextRequest) {
-  const supabase = await createServerClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const body = await req.json()
-  const contacts = Array.isArray(body?.contacts) ? body.contacts : []
-  const admin = createAdminClient()
-  const saved: any[] = []
-  const errors: string[] = []
-
-  for (const contact of contacts.slice(0, 250)) {
-    const payload = demoContactToDb(contact)
-    let existing: any = null
-
-    if (hasUuidShape(contact?.dbId)) {
-      const { data } = await admin
-        .from('contacts')
-        .select('id')
-        .eq('user_id', user.id)
-        .eq('id', contact.dbId)
-        .maybeSingle()
-      existing = data
-    }
-
-    if (!existing && contact?.id) {
-      const { data } = await admin
-        .from('contacts')
-        .select('id')
-        .eq('user_id', user.id)
-        .filter('metadata->>demo_local_id', 'eq', String(contact.id))
-        .maybeSingle()
-      existing = data
-    }
-
-    if (existing?.id) {
-      const { data, error } = await admin
-        .from('contacts')
-        .update(payload)
-        .eq('user_id', user.id)
-        .eq('id', existing.id)
-        .select('*, companies(name)')
-        .single()
-      if (error) errors.push(`${contact?.name || contact?.company || contact?.id}: ${error.message}`)
-      else saved.push(dbContactToDemo(data))
-    } else {
-      const { data, error } = await admin
-        .from('contacts')
-        .insert({ ...payload, user_id: user.id })
-        .select('*, companies(name)')
-        .single()
-      if (error) errors.push(`${contact?.name || contact?.company || contact?.id}: ${error.message}`)
-      else saved.push(dbContactToDemo(data))
-    }
+  if (!hasUsableAdminSupabaseConfig()) {
+    return NextResponse.json({
+      saved: [],
+      persistence: 'local',
+      code: 'supabase_config_missing',
+      message: 'Database cloud non configurato: dati mantenuti localmente. Imposta URL, anon key e service role reali nel deploy.',
+    }, { status: 503 })
   }
 
-  if (errors.length) return NextResponse.json({ saved, errors }, { status: 207 })
-  return NextResponse.json({ saved, count: saved.length, persistence: 'cloud' })
+  try {
+    const supabase = await createServerClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError) return NextResponse.json({ error: authError.message, code: 'auth_error' }, { status: 401 })
+    if (!user) return NextResponse.json({ error: 'Unauthorized', code: 'auth_required' }, { status: 401 })
+
+    const body = await req.json().catch(() => null)
+    const contacts = Array.isArray(body?.contacts) ? body.contacts : []
+    if (!contacts.length) return NextResponse.json({ saved: [], count: 0, persistence: 'cloud' })
+
+    const admin = createAdminClient()
+    const saved: any[] = []
+    const errors: string[] = []
+
+    for (const contact of contacts.slice(0, 250)) {
+      const payload = demoContactToDb(contact)
+      let existing: any = null
+
+      if (hasUuidShape(contact?.dbId)) {
+        const { data, error } = await admin
+          .from('contacts')
+          .select('id')
+          .eq('user_id', user.id)
+          .eq('id', contact.dbId)
+          .maybeSingle()
+        if (error) errors.push(`${contactLabel(contact)}: ricerca per dbId fallita: ${error.message}`)
+        existing = data
+      }
+
+      if (!existing && contact?.id) {
+        const { data, error } = await admin
+          .from('contacts')
+          .select('id')
+          .eq('user_id', user.id)
+          .filter('metadata->>demo_local_id', 'eq', String(contact.id))
+          .maybeSingle()
+        if (error) errors.push(`${contactLabel(contact)}: ricerca per ID locale fallita: ${error.message}`)
+        existing = data
+      }
+
+      if (existing?.id) {
+        const { data, error } = await admin
+          .from('contacts')
+          .update(payload)
+          .eq('user_id', user.id)
+          .eq('id', existing.id)
+          .select('*')
+          .single()
+        if (error) errors.push(`${contactLabel(contact)}: ${error.message}`)
+        else saved.push(dbContactToDemo(data))
+      } else {
+        const { data, error } = await admin
+          .from('contacts')
+          .insert({ ...payload, user_id: user.id })
+          .select('*')
+          .single()
+        if (error) errors.push(`${contactLabel(contact)}: ${error.message}`)
+        else saved.push(dbContactToDemo(data))
+      }
+    }
+
+    if (errors.length) return NextResponse.json({ saved, errors, code: 'partial_sync_failed' }, { status: 207 })
+    return NextResponse.json({ saved, count: saved.length, persistence: 'cloud' })
+  } catch (error: any) {
+    return NextResponse.json({
+      saved: [],
+      error: error?.message || 'Errore imprevisto durante la sincronizzazione cloud.',
+      code: 'sync_unhandled_error',
+    }, { status: 500 })
+  }
 }
