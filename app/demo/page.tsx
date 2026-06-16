@@ -1430,4 +1430,3 @@ Voice Desk`
   <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 border-t bg-white/95 backdrop-blur px-2 pt-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] grid grid-cols-4 gap-1">{[{ id: 'dashboard', label: 'Home', icon: TrendingUp }, { id: 'contacts', label: 'Lead', icon: Users }, { id: 'conversations', label: 'Messaggi', icon: MessageSquareText }, { id: 'agent', label: 'Agente', icon: Bot }].map((item) => { const Icon = item.icon; return <button key={item.id} onClick={() => setSection(item.id as Section)} className={`rounded-2xl px-2 py-2 text-[11px] font-semibold flex flex-col items-center gap-1 ${section === item.id ? 'bg-blue-50 text-blue-700' : 'text-gray-600'}`}><Icon className="w-4 h-4" />{item.label}</button> })}</nav></main></div></div>
   )
 }
-Come generare deliverable passo dopo passo - Manus
