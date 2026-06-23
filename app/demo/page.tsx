@@ -869,6 +869,7 @@ export default function DemoAppPage() {
   const [question, setQuestion] = useState('Chi devo contattare oggi?')
   const [answer, setAnswer] = useState('Carica il primo batch o inserisci i tuoi contatti qualificati: userò quei dati per suggerire priorità, follow-up e prossime azioni.')
   const [search, setSearch] = useState('')
+  const [netFreeListQuery, setNetFreeListQuery] = useState('')
   const [mailingPriority, setMailingPriority] = useState<MailingPriorityFilter>('A')
   const [mailingStage, setMailingStage] = useState<MailingStageFilter>('Tutti')
   const [mailingSeparator, setMailingSeparator] = useState<MailingSeparator>('punto e virgola')
@@ -2178,7 +2179,13 @@ Esito da registrare: Approvato, Bocciato o Da valutare. Se approvato, la fase PE
   function exportData() { const blob = new Blob([JSON.stringify({ profile: activeProfile, contacts, tasks, conversations }, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `relazione-crm-${activeProfile?.name || 'profilo'}-backup-${today()}.json`.replace(/\s+/g, '-').toLowerCase(); a.click(); URL.revokeObjectURL(url) }
   function importData(event: ChangeEvent<HTMLInputElement>) { const file = event.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => { try { const parsed = JSON.parse(String(reader.result)) as StoredCrmData; const nextContacts = Array.isArray(parsed.contacts) ? parsed.contacts.map(normalizeContact) : []; const nextTasks = Array.isArray(parsed.tasks) ? parsed.tasks : []; const nextConversations = Array.isArray(parsed.conversations) ? parsed.conversations : []; setContacts(nextContacts); setTasks(nextTasks); setConversations(nextConversations); setSelectedContactId(nextContacts[0]?.id || ''); setAnswer('Backup importato nel profilo attivo. Gli altri profili non sono stati modificati.'); } catch { window.alert('Il file selezionato non sembra un backup valido del CRM.') } finally { event.target.value = '' } }; reader.readAsText(file) }
 
-  function parseCsvRows(csv: string) {
+  function detectCsvDelimiter(csv: string) {
+    const firstLine = csv.split(/\r?\n/).find((line) => line.trim()) || ''
+    const candidates = [',', ';', '\t']
+    return candidates.map((delimiter) => ({ delimiter, count: firstLine.split(delimiter).length - 1 })).sort((a, b) => b.count - a.count)[0]?.delimiter || ','
+  }
+
+  function parseCsvRows(csv: string, delimiter = ',') {
     const rows: string[][] = []
     let row: string[] = []
     let cell = ''
@@ -2188,7 +2195,7 @@ Esito da registrare: Approvato, Bocciato o Da valutare. Se approvato, la fase PE
       const next = csv[i + 1]
       if (char === '"' && quoted && next === '"') { cell += '"'; i += 1; continue }
       if (char === '"') { quoted = !quoted; continue }
-      if (char === ',' && !quoted) { row.push(cell); cell = ''; continue }
+      if (char === delimiter && !quoted) { row.push(cell); cell = ''; continue }
       if ((char === '\n' || char === '\r') && !quoted) {
         if (char === '\r' && next === '\n') i += 1
         row.push(cell)
@@ -2204,97 +2211,135 @@ Esito da registrare: Approvato, Bocciato o Da valutare. Se approvato, la fase PE
     return rows
   }
 
+  function normalizeImportKey(key: string) {
+    return key.trim().replace(/^\uFEFF/, '').toLowerCase().replace(/[^a-z0-9]/g, '')
+  }
+
+  function netFreeDedupeKey(contact: Partial<Contact>) {
+    const identity = (contact.phone || contact.email || contact.socialInstagramUrl || contact.socialFacebookUrl || contact.name || '').toLowerCase().trim()
+    return `${(contact.name || '').toLowerCase().trim()}|${identity}`
+  }
+
+  function netFreeContactFromRecord(record: Record<string, any>, index: number, timestamp: string): Contact {
+    const normalizedEntries = Object.entries(record || {}).map(([key, value]) => [normalizeImportKey(key), value] as const)
+    const normalizedRecord = Object.fromEntries(normalizedEntries)
+    const get = (...keys: string[]) => {
+      for (const key of keys) {
+        const value = normalizedRecord[normalizeImportKey(key)]
+        if (value !== undefined && value !== null && String(value).trim()) return String(value).trim()
+      }
+      return ''
+    }
+    const name = get('name', 'nome', 'leadName', 'contactName') || `Lead NetFree ${index + 1}`
+    const phone = get('phone', 'telefono', 'mobile', 'cellulare', 'claudioPreferredPhone')
+    const email = get('email', 'mail', 'generalEmail')
+    const preferredChannel = get('preferredContactChannel', 'canalePreferito', 'channel')
+    const preferredTimeWindow = get('bestCallWindow', 'bestMessageWindow', 'fasciaOraria', 'orarioPreferito')
+    const leadProfile = [get('leadOccupation', 'occupazione'), get('leadBusinessContext', 'contesto')].filter(Boolean).join(' · ') || get('leadBusinessContext', 'contesto', 'researchSummary')
+    const candidateReason = get('netFreeCandidateReason', 'motivoNetFree', 'candidateReason', 'probableNeeds')
+    const sourceId = get('id', 'sourceId') || `netfree-${index + 1}`
+    return normalizeContact({
+      id: `netfree-${sourceId.replace(/[^a-zA-Z0-9_-]/g, '-')}`,
+      name,
+      company: get('company', 'azienda') || name,
+      role: get('role', 'ruolo') || '',
+      email,
+      phone,
+      status: 'Lead',
+      interest: preferredChannel === 'WhatsApp/Telefono' ? 7 : 6,
+      trust: 5,
+      value: 0,
+      topics: ['NetFree', preferredChannel || 'Da qualificare'].filter(Boolean),
+      nextAction: 'Lead raccolto: definire internamente strategia, canale e tono prima di qualsiasi contatto.',
+      notes: get('claudioLeadBrief', 'netFreeBriefForClaudio', 'note', 'notes'),
+      category: get('category', 'categoria') || 'Lead NetFree',
+      subcategory: get('leadOpennessLevel', 'subcategory', 'sottocategoria') || 'Da qualificare',
+      city: get('city', 'città', 'citta'),
+      address: get('address', 'indirizzo'),
+      website: get('website', 'sito'),
+      generalEmail: email,
+      decisionMakerName: get('decisionMakerName', 'referente') || name,
+      decisionMakerRole: get('decisionMakerRole', 'ruoloReferente'),
+      decisionMakerEmail: get('decisionMakerEmail') || email,
+      estimatedSize: '',
+      priceRange: '',
+      rating: '',
+      reviews: '',
+      services: 'NetFree; networking relazionale; valutazione opportunità',
+      priorityLevel: num(get('confidenceScore', 'score')) >= 85 ? 'A' : 'B',
+      messageAngle: candidateReason,
+      personalizationHook: `Canale consigliato: ${preferredChannel || 'da qualificare'}; finestra migliore: ${get('bestMessageWindow') || preferredTimeWindow || 'da verificare'}.`,
+      outreachStage: 'Da qualificare',
+      sourceBatch: 'Import NetFree curato',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      lastContact: today(),
+      socialInstagramUrl: get('socialInstagramUrl', 'instagram'),
+      socialFacebookUrl: get('socialFacebookUrl', 'facebook'),
+      confidenceScore: num(get('confidenceScore', 'score')),
+      relationshipType: 'Partner operativo',
+      netFreeStage: get('netFreeStage') as NetFreeStage || 'Lead raccolto',
+      netFreeCandidateReason: candidateReason,
+      netFreeConsentToCall: false,
+      netFreeConsentAt: '',
+      netFreeSharedWithClaudioAt: '',
+      netFreeClaudioFeedback: '',
+      netFreeNextStep: 'Raccogliere informazioni base e definire una strategia relazionale rispettosa.',
+      netFreeEstimatedOpportunity: get('leadOpennessLevel'),
+      netFreePreferredPhone: get('claudioPreferredPhone') || phone,
+      netFreeLeadProfile: leadProfile,
+      netFreePreferredChannel: preferredChannel,
+      netFreePreferredTimeWindow: preferredTimeWindow,
+      netFreeCallTone: get('claudioCallTone'),
+      netFreeBriefForClaudio: get('claudioLeadBrief', 'netFreeBriefForClaudio'),
+    } as Contact)
+  }
+
   function importNetFreeCsv(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
     if (!file) return
     const reader = new FileReader()
     reader.onload = () => {
       try {
-        const rows = parseCsvRows(String(reader.result || ''))
-        const [headers, ...dataRows] = rows
-        if (!headers?.length) throw new Error('CSV vuoto')
-        const headerMap = Object.fromEntries(headers.map((header, index) => [header.trim(), index]))
-        const get = (row: string[], key: string) => row[headerMap[key]]?.trim() || ''
+        const raw = String(reader.result || '').trim()
+        if (!raw) throw new Error('file vuoto')
         const timestamp = nowIso()
-        const importedContacts = dataRows.map((row, index) => {
-          const name = get(row, 'name') || `Lead NetFree ${index + 1}`
-          const phone = get(row, 'phone') || get(row, 'claudioPreferredPhone')
-          const email = get(row, 'email')
-          const preferredChannel = get(row, 'preferredContactChannel')
-          const preferredTimeWindow = get(row, 'bestCallWindow') || get(row, 'bestMessageWindow')
-          const leadProfile = [get(row, 'leadOccupation'), get(row, 'leadBusinessContext')].filter(Boolean).join(' · ') || get(row, 'leadBusinessContext')
-          const candidateReason = get(row, 'netFreeCandidateReason')
-          const sourceId = get(row, 'id') || `netfree-${index + 1}`
-          return normalizeContact({
-            id: `netfree-${sourceId.replace(/[^a-zA-Z0-9_-]/g, '-')}`,
-            name,
-            company: name,
-            role: '',
-            email,
-            phone,
-            status: 'Lead',
-            interest: preferredChannel === 'WhatsApp/Telefono' ? 7 : 6,
-            trust: 5,
-            value: 0,
-            topics: ['NetFree', preferredChannel || 'Da qualificare'].filter(Boolean),
-            nextAction: 'Lead raccolto: definire internamente strategia, canale e tono prima di qualsiasi contatto.',
-            notes: get(row, 'claudioLeadBrief'),
-            category: 'Lead NetFree',
-            subcategory: get(row, 'leadOpennessLevel') || 'Da qualificare',
-            city: '',
-            address: '',
-            website: '',
-            generalEmail: email,
-            decisionMakerName: name,
-            decisionMakerRole: '',
-            decisionMakerEmail: email,
-            estimatedSize: '',
-            priceRange: '',
-            rating: '',
-            reviews: '',
-            services: 'NetFree; networking relazionale; valutazione opportunità',
-            priorityLevel: Number(get(row, 'confidenceScore') || 0) >= 85 ? 'A' : 'B',
-            messageAngle: candidateReason,
-            personalizationHook: `Canale consigliato: ${preferredChannel || 'da qualificare'}; finestra migliore: ${get(row, 'bestMessageWindow') || preferredTimeWindow || 'da verificare'}.`,
-            outreachStage: 'Da qualificare',
-            sourceBatch: 'Import NetFree curato',
-            createdAt: timestamp,
-            updatedAt: timestamp,
-            lastContact: today(),
-            socialInstagramUrl: get(row, 'socialInstagramUrl'),
-            socialFacebookUrl: get(row, 'socialFacebookUrl'),
-            confidenceScore: num(get(row, 'confidenceScore')),
-            relationshipType: 'Partner operativo',
-            netFreeStage: 'Lead raccolto',
-            netFreeCandidateReason: candidateReason,
-            netFreeConsentToCall: false,
-            netFreeConsentAt: '',
-            netFreeSharedWithClaudioAt: '',
-            netFreeClaudioFeedback: '',
-            netFreeNextStep: 'Raccogliere informazioni base e definire una strategia relazionale rispettosa.',
-            netFreeEstimatedOpportunity: get(row, 'leadOpennessLevel'),
-            netFreePreferredPhone: get(row, 'claudioPreferredPhone') || phone,
-            netFreeLeadProfile: leadProfile,
-            netFreePreferredChannel: preferredChannel,
-            netFreePreferredTimeWindow: preferredTimeWindow,
-            netFreeCallTone: get(row, 'claudioCallTone'),
-            netFreeBriefForClaudio: get(row, 'claudioLeadBrief'),
-          } as Contact)
+        let records: Record<string, any>[] = []
+        if (raw.startsWith('{') || raw.startsWith('[')) {
+          const parsed = JSON.parse(raw)
+          records = Array.isArray(parsed) ? parsed : Array.isArray(parsed.contacts) ? parsed.contacts : Array.isArray(parsed.leads) ? parsed.leads : []
+        } else {
+          const delimiter = detectCsvDelimiter(raw)
+          const rows = parseCsvRows(raw, delimiter)
+          const [headers, ...dataRows] = rows
+          if (!headers?.length) throw new Error('CSV vuoto')
+          const normalizedHeaders = headers.map((header) => header.trim()).map((header, index) => header || `__empty_${index}`)
+          records = dataRows.map((row) => Object.fromEntries(normalizedHeaders.map((header, index) => [header, row[index]?.trim() || '']).filter(([header]) => !String(header).startsWith('__empty_'))))
+        }
+        const importedContacts = records.map((record, index) => netFreeContactFromRecord(record, index, timestamp)).filter((contact) => contact.name.trim())
+        if (importedContacts.length === 0) throw new Error('nessun lead riconosciuto')
+        const existing = new Set(contacts.map(netFreeDedupeKey))
+        const fresh = importedContacts.filter((contact) => {
+          const key = netFreeDedupeKey(contact)
+          if (existing.has(key)) return false
+          existing.add(key)
+          return true
         })
-        setContacts((current) => {
-          const existing = new Set(current.map((contact) => `${contact.name.toLowerCase()}|${(contact.phone || contact.email || contact.socialInstagramUrl || '').toLowerCase()}`))
-          const fresh = importedContacts.filter((contact) => {
-            const key = `${contact.name.toLowerCase()}|${(contact.phone || contact.email || contact.socialInstagramUrl || '').toLowerCase()}`
-            if (existing.has(key)) return false
-            existing.add(key)
-            return true
-          })
-          return [...fresh, ...current]
-        })
+        const skipped = importedContacts.length - fresh.length
+        if (fresh.length > 0) {
+          setContacts((current) => [...fresh, ...current])
+          setSelectedContactId(fresh[0].id)
+          setTasks((current) => [
+            ...fresh.slice(0, 50).map((contact) => ({ id: id('task'), title: `Qualificare lead NetFree ${contact.name}: completare dati base e strategia di contatto`, contactId: contact.id, priority: contact.priorityLevel === 'A' ? 'Alta' as Priority : 'Media' as Priority, due: addDays(2), completed: false, createdAt: timestamp })),
+            ...current,
+          ])
+        }
         setSection('netfree')
-        setAnswer(`Import NetFree completato: ${importedContacts.length} righe lette dal CSV curato. I duplicati già presenti sono stati saltati in base a nome e canale principale.`)
-      } catch {
-        window.alert('CSV NetFree non valido o non leggibile. Usa il file data/netfree_contacts_curated.csv generato dalla deduplica.')
+        setAnswer(fresh.length > 0
+          ? `Import NetFree completato: ${fresh.length} nuovi lead aggiunti, ${skipped} duplicati saltati. Totale candidati NetFree dopo l’import: ${netFreeContacts.length + fresh.length}. Trovi la lista nella sezione NetFree, sotto “Lista contatti importati”. Ho selezionato il primo lead importato.`
+          : `Import NetFree letto correttamente, ma non ho aggiunto nuovi lead: le ${importedContacts.length} righe risultano già presenti in questo profilo. Se vuoi ricaricare da zero, usa Reset oppure importa in un profilo nuovo.`)
+      } catch (error: any) {
+        window.alert(`File NetFree non valido o non leggibile. Usa CSV o JSON curato. Dettaglio: ${error?.message || 'formato non riconosciuto'}`)
       } finally {
         event.target.value = ''
       }
@@ -2313,6 +2358,15 @@ Esito da registrare: Approvato, Bocciato o Da valutare. Se approvato, la fase PE
     stage,
     items: netFreeContacts.filter((contact) => (contact.netFreeStage || 'Non avviato') === stage),
   }))
+  const filteredNetFreeContacts = netFreeContacts.filter((contact) => {
+    const q = netFreeListQuery.trim().toLowerCase()
+    if (!q) return true
+    return [contact.name, contact.phone, contact.email, contact.city, contact.netFreePreferredChannel, contact.netFreeLeadProfile, contact.netFreeCandidateReason, contact.netFreeStage]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+      .includes(q)
+  })
   const lcrContacts = contacts.filter((contact) => contact.lcrSelectionOutcome && contact.lcrSelectionOutcome !== 'Non presente')
   const lcrApprovedContacts = lcrApprovedList()
   const lcrMatrixPreview = lcrApprovedContacts.map((contact, index) => {
@@ -2329,7 +2383,7 @@ Esito da registrare: Approvato, Bocciato o Da valutare. Se approvato, la fase PE
   const nav = [{ id: 'dashboard', label: 'Dashboard', icon: TrendingUp }, { id: 'contacts', label: 'Database 100', icon: Users }, { id: 'calendar', label: 'Calendario', icon: CalendarDays }, { id: 'pipeline', label: 'Flusso', icon: ChevronRight }, { id: 'conversations', label: 'Comunicazioni', icon: Upload }, { id: 'research', label: 'Ricerca guidata', icon: Search }, { id: 'study', label: 'Studio su misura', icon: Calculator }, { id: 'netfree', label: 'NetFree', icon: Phone }, { id: 'lcr', label: 'LCR 6x6', icon: CheckSquare }, { id: 'team', label: 'Soci e rete', icon: UserPlus }, { id: 'investors', label: 'Investitori', icon: TrendingUp }, { id: 'documents', label: 'Contratti e LOI', icon: ClipboardList }, { id: 'materials', label: 'Materiali', icon: ClipboardList }, { id: 'mailing', label: 'Mailing CCN', icon: Mail }, { id: 'agent', label: 'Agente', icon: Bot }] as const
 
   return (
-    <div className="min-h-screen bg-[#f7f6f1] text-gray-900"><div className="flex min-h-screen"><aside className="hidden md:flex w-72 flex-col border-r border-stone-200 bg-white/90 p-5"><div className="flex items-center gap-3 mb-8"><div className="w-10 h-10 rounded-2xl bg-blue-100 text-blue-700 flex items-center justify-center font-bold">AI</div><div><div className="font-bold text-lg">RelazioneCRM</div><div className="text-xs text-gray-500">Database privato</div></div></div><nav className="space-y-2">{nav.map((item) => { const Icon = item.icon; return <button key={item.id} onClick={() => setSection(item.id)} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition ${section === item.id ? 'bg-blue-50 text-blue-700 font-semibold' : 'hover:bg-stone-100 text-gray-700'}`}><Icon className="w-4 h-4" /> {item.label}</button> })}</nav><div className="mt-auto rounded-2xl bg-green-50 border border-green-200 p-4 text-sm text-green-900"><strong className="block mb-1">Uso privato operativo</strong>Database cloud se autenticato; fallback locale con backup se il collegamento non è disponibile.</div></aside><main className="flex-1 p-3 pb-28 md:p-8 md:pb-8 max-w-7xl mx-auto w-full"><header className="flex flex-col lg:flex-row lg:items-center gap-4 justify-between mb-8"><div><h1 className="text-3xl font-bold tracking-tight">CRM privato · 100 contatti qualificati</h1><p className="text-gray-500 mt-1">Gestisci lead premium, comunicazioni, follow-up e backup. Se il database è collegato, i contatti restano persistenti dopo ogni riapertura.</p><div className="mt-3 flex flex-col sm:flex-row gap-2"><div className={`inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-semibold ${cloudStatus === 'cloud' ? 'bg-green-50 border-green-200 text-green-800' : cloudStatus === 'salvataggio' ? 'bg-blue-50 border-blue-200 text-blue-800' : cloudStatus === 'locale' ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-red-50 border-red-200 text-red-800'}`}><Database className="w-4 h-4 shrink-0" /><span>{cloudMessage}</span></div><div className={`inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-semibold ${authEmail ? 'bg-slate-50 border-slate-200 text-slate-800' : 'bg-amber-50 border-amber-200 text-amber-800'}`}><ShieldCheck className="w-4 h-4 shrink-0" />{authEmail ? `Accesso: ${authEmail}` : 'Accesso non rilevato: usa login per lavorare in cloud'}</div><select value={currentRole} onChange={(e) => setCurrentRole(e.target.value as UserRole)} className="rounded-2xl border px-3 py-2 text-xs font-semibold bg-white" aria-label="Ruolo operativo">{userRoles.map((role) => <option key={role} value={role}>{role}</option>)}</select></div></div><div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2"><select value={section} onChange={(e) => setSection(e.target.value as Section)} className="md:hidden col-span-2 sm:col-span-1 rounded-xl border bg-white px-3 py-3 text-sm font-semibold" aria-label="Sezione CRM">{nav.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select><button onClick={importMilanoBatch1} className="px-4 py-2 rounded-xl bg-blue-700 text-white hover:bg-blue-800 text-sm inline-flex items-center gap-2"><Database className="w-4 h-4" />Carica Batch Milano 1</button><button onClick={exportData} className="px-4 py-2 rounded-xl border bg-white hover:bg-stone-50 text-sm inline-flex items-center gap-2"><Download className="w-4 h-4" />Backup</button><label className="px-4 py-2 rounded-xl border bg-white hover:bg-stone-50 text-sm inline-flex items-center gap-2 cursor-pointer"><Upload className="w-4 h-4" />Importa<input type="file" accept="application/json" onChange={importData} className="hidden" /></label><label className="px-4 py-2 rounded-xl border bg-teal-50 hover:bg-teal-100 text-teal-800 text-sm inline-flex items-center gap-2 cursor-pointer"><Database className="w-4 h-4" />Import NetFree CSV<input type="file" accept=".csv,text/csv" onChange={importNetFreeCsv} className="hidden" /></label><button onClick={clearAllData} className="px-4 py-2 rounded-xl border bg-white hover:bg-red-50 text-sm text-red-700 inline-flex items-center gap-2 justify-center"><Trash2 className="w-4 h-4" />Reset</button>{authEmail ? <button onClick={signOutFromDemo} className="col-span-2 sm:col-span-1 px-4 py-2 rounded-xl border bg-white hover:bg-stone-50 text-sm inline-flex items-center gap-2 justify-center"><LogOut className="w-4 h-4" />Esci</button> : <button onClick={goToLogin} className="col-span-2 sm:col-span-1 px-4 py-2 rounded-xl bg-gray-900 text-white hover:bg-black text-sm inline-flex items-center gap-2 justify-center"><LogIn className="w-4 h-4" />Accedi</button>}</div></header><section className="mb-8 rounded-3xl border bg-white p-5"><div className="flex flex-col xl:flex-row xl:items-end gap-4 justify-between"><div><div className="flex items-center gap-2 text-sm font-semibold text-blue-800"><ShieldCheck className="w-4 h-4" /> Profili separati per te e soci</div><p className="text-gray-600 mt-1">Profilo attivo: <strong>{activeProfile?.name || 'Profilo locale'}</strong>. Con database attivo i contatti vengono ricaricati dal cloud; in modalità locale usa Backup/Importa per non perdere dati.</p></div><div className="flex flex-col md:flex-row gap-2 md:items-center"><select value={activeProfileId} onChange={(e) => switchProfile(e.target.value)} className="rounded-2xl border px-4 py-3 bg-white min-w-48">{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select><div className="flex gap-2"><input value={newProfileName} onChange={(e) => setNewProfileName(e.target.value)} className="rounded-2xl border px-4 py-3 w-48" placeholder="Nome socio/profilo" /><button onClick={createProfile} className="rounded-2xl bg-blue-700 text-white px-4 py-3 font-semibold hover:bg-blue-800"><UserPlus className="w-4 h-4 inline mr-2" />Crea</button></div></div></div>{isAdmin && <div className="mt-5 rounded-3xl border border-blue-100 bg-blue-50 p-4"><div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4"><div><div className="text-sm font-bold text-blue-900">Permessi servizi/materiali per profilo attivo</div><p className="text-sm text-blue-900/80 mt-1">Decidi quali servizi e documenti un socio o collaboratore può aprire e condividere. L’amministratore vede sempre tutto; i profili non amministratori vedono solo i materiali autorizzati.</p></div><select value={activeProfile?.role || 'Collaboratore'} onChange={(e) => activeProfile && updateProfilePermissions(activeProfile.id, { role: e.target.value as UserRole, allowedMaterialIds: e.target.value === 'Amministratore' ? allMaterialIds : activeProfile.allowedMaterialIds })} className="rounded-2xl border px-4 py-3 bg-white min-w-48">{userRoles.map((role) => <option key={role} value={role}>{role}</option>)}</select></div><div className="mt-4 grid md:grid-cols-2 xl:grid-cols-3 gap-3">{networkMaterials.map((material) => { const checked = activeProfile?.role === 'Amministratore' || !!activeProfile?.allowedMaterialIds?.includes(material.id); return <label key={material.id} className={`rounded-2xl border p-3 bg-white flex items-start gap-3 ${checked ? 'border-blue-200' : 'border-stone-200 opacity-75'}`}><input type="checkbox" checked={checked} disabled={!activeProfile || activeProfile.role === 'Amministratore'} onChange={() => activeProfile && toggleProfileMaterial(activeProfile.id, material.id)} className="mt-1" /><span><span className="block text-sm font-bold">{material.area}</span><span className="block text-xs text-gray-600">{material.title}</span></span></label> })}</div><textarea value={activeProfile?.permissionNotes || ''} onChange={(e) => activeProfile && updateProfilePermissions(activeProfile.id, { permissionNotes: e.target.value })} className="mt-4 w-full rounded-2xl border p-3 text-sm bg-white" placeholder="Note interne sui permessi: es. può condividere solo VoiceDesk e PEF cliente; Blotix solo dopo autorizzazione admin..." /></div>}
+    <div className="min-h-screen bg-[#f7f6f1] text-gray-900"><div className="flex min-h-screen"><aside className="hidden md:flex w-72 flex-col border-r border-stone-200 bg-white/90 p-5"><div className="flex items-center gap-3 mb-8"><div className="w-10 h-10 rounded-2xl bg-blue-100 text-blue-700 flex items-center justify-center font-bold">AI</div><div><div className="font-bold text-lg">RelazioneCRM</div><div className="text-xs text-gray-500">Database privato</div></div></div><nav className="space-y-2">{nav.map((item) => { const Icon = item.icon; return <button key={item.id} onClick={() => setSection(item.id)} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition ${section === item.id ? 'bg-blue-50 text-blue-700 font-semibold' : 'hover:bg-stone-100 text-gray-700'}`}><Icon className="w-4 h-4" /> {item.label}</button> })}</nav><div className="mt-auto rounded-2xl bg-green-50 border border-green-200 p-4 text-sm text-green-900"><strong className="block mb-1">Uso privato operativo</strong>Database cloud se autenticato; fallback locale con backup se il collegamento non è disponibile.</div></aside><main className="flex-1 p-3 pb-28 md:p-8 md:pb-8 max-w-7xl mx-auto w-full"><header className="flex flex-col lg:flex-row lg:items-center gap-4 justify-between mb-8"><div><h1 className="text-3xl font-bold tracking-tight">CRM privato · 100 contatti qualificati</h1><p className="text-gray-500 mt-1">Gestisci lead premium, comunicazioni, follow-up e backup. Se il database è collegato, i contatti restano persistenti dopo ogni riapertura.</p><div className="mt-3 flex flex-col sm:flex-row gap-2"><div className={`inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-semibold ${cloudStatus === 'cloud' ? 'bg-green-50 border-green-200 text-green-800' : cloudStatus === 'salvataggio' ? 'bg-blue-50 border-blue-200 text-blue-800' : cloudStatus === 'locale' ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-red-50 border-red-200 text-red-800'}`}><Database className="w-4 h-4 shrink-0" /><span>{cloudMessage}</span></div><div className={`inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-semibold ${authEmail ? 'bg-slate-50 border-slate-200 text-slate-800' : 'bg-amber-50 border-amber-200 text-amber-800'}`}><ShieldCheck className="w-4 h-4 shrink-0" />{authEmail ? `Accesso: ${authEmail}` : 'Accesso non rilevato: usa login per lavorare in cloud'}</div><select value={currentRole} onChange={(e) => setCurrentRole(e.target.value as UserRole)} className="rounded-2xl border px-3 py-2 text-xs font-semibold bg-white" aria-label="Ruolo operativo">{userRoles.map((role) => <option key={role} value={role}>{role}</option>)}</select></div></div><div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2"><select value={section} onChange={(e) => setSection(e.target.value as Section)} className="md:hidden col-span-2 sm:col-span-1 rounded-xl border bg-white px-3 py-3 text-sm font-semibold" aria-label="Sezione CRM">{nav.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select><button onClick={importMilanoBatch1} className="px-4 py-2 rounded-xl bg-blue-700 text-white hover:bg-blue-800 text-sm inline-flex items-center gap-2"><Database className="w-4 h-4" />Carica Batch Milano 1</button><button onClick={exportData} className="px-4 py-2 rounded-xl border bg-white hover:bg-stone-50 text-sm inline-flex items-center gap-2"><Download className="w-4 h-4" />Backup</button><label className="px-4 py-2 rounded-xl border bg-white hover:bg-stone-50 text-sm inline-flex items-center gap-2 cursor-pointer"><Upload className="w-4 h-4" />Importa<input type="file" accept="application/json" onChange={importData} className="hidden" /></label><label className="px-4 py-2 rounded-xl border bg-teal-50 hover:bg-teal-100 text-teal-800 text-sm inline-flex items-center gap-2 cursor-pointer"><Database className="w-4 h-4" />Import NetFree dati<input type="file" accept=".csv,.json,text/csv,application/json" onChange={importNetFreeCsv} className="hidden" /></label><button onClick={clearAllData} className="px-4 py-2 rounded-xl border bg-white hover:bg-red-50 text-sm text-red-700 inline-flex items-center gap-2 justify-center"><Trash2 className="w-4 h-4" />Reset</button>{authEmail ? <button onClick={signOutFromDemo} className="col-span-2 sm:col-span-1 px-4 py-2 rounded-xl border bg-white hover:bg-stone-50 text-sm inline-flex items-center gap-2 justify-center"><LogOut className="w-4 h-4" />Esci</button> : <button onClick={goToLogin} className="col-span-2 sm:col-span-1 px-4 py-2 rounded-xl bg-gray-900 text-white hover:bg-black text-sm inline-flex items-center gap-2 justify-center"><LogIn className="w-4 h-4" />Accedi</button>}</div></header><section className="mb-8 rounded-3xl border bg-white p-5"><div className="flex flex-col xl:flex-row xl:items-end gap-4 justify-between"><div><div className="flex items-center gap-2 text-sm font-semibold text-blue-800"><ShieldCheck className="w-4 h-4" /> Profili separati per te e soci</div><p className="text-gray-600 mt-1">Profilo attivo: <strong>{activeProfile?.name || 'Profilo locale'}</strong>. Con database attivo i contatti vengono ricaricati dal cloud; in modalità locale usa Backup/Importa per non perdere dati.</p></div><div className="flex flex-col md:flex-row gap-2 md:items-center"><select value={activeProfileId} onChange={(e) => switchProfile(e.target.value)} className="rounded-2xl border px-4 py-3 bg-white min-w-48">{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select><div className="flex gap-2"><input value={newProfileName} onChange={(e) => setNewProfileName(e.target.value)} className="rounded-2xl border px-4 py-3 w-48" placeholder="Nome socio/profilo" /><button onClick={createProfile} className="rounded-2xl bg-blue-700 text-white px-4 py-3 font-semibold hover:bg-blue-800"><UserPlus className="w-4 h-4 inline mr-2" />Crea</button></div></div></div>{isAdmin && <div className="mt-5 rounded-3xl border border-blue-100 bg-blue-50 p-4"><div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4"><div><div className="text-sm font-bold text-blue-900">Permessi servizi/materiali per profilo attivo</div><p className="text-sm text-blue-900/80 mt-1">Decidi quali servizi e documenti un socio o collaboratore può aprire e condividere. L’amministratore vede sempre tutto; i profili non amministratori vedono solo i materiali autorizzati.</p></div><select value={activeProfile?.role || 'Collaboratore'} onChange={(e) => activeProfile && updateProfilePermissions(activeProfile.id, { role: e.target.value as UserRole, allowedMaterialIds: e.target.value === 'Amministratore' ? allMaterialIds : activeProfile.allowedMaterialIds })} className="rounded-2xl border px-4 py-3 bg-white min-w-48">{userRoles.map((role) => <option key={role} value={role}>{role}</option>)}</select></div><div className="mt-4 grid md:grid-cols-2 xl:grid-cols-3 gap-3">{networkMaterials.map((material) => { const checked = activeProfile?.role === 'Amministratore' || !!activeProfile?.allowedMaterialIds?.includes(material.id); return <label key={material.id} className={`rounded-2xl border p-3 bg-white flex items-start gap-3 ${checked ? 'border-blue-200' : 'border-stone-200 opacity-75'}`}><input type="checkbox" checked={checked} disabled={!activeProfile || activeProfile.role === 'Amministratore'} onChange={() => activeProfile && toggleProfileMaterial(activeProfile.id, material.id)} className="mt-1" /><span><span className="block text-sm font-bold">{material.area}</span><span className="block text-xs text-gray-600">{material.title}</span></span></label> })}</div><textarea value={activeProfile?.permissionNotes || ''} onChange={(e) => activeProfile && updateProfilePermissions(activeProfile.id, { permissionNotes: e.target.value })} className="mt-4 w-full rounded-2xl border p-3 text-sm bg-white" placeholder="Note interne sui permessi: es. può condividere solo VoiceDesk e PEF cliente; Blotix solo dopo autorizzazione admin..." /></div>}
 </section>
 
 <section className="mb-8 rounded-3xl border bg-white p-5">
@@ -2367,7 +2421,7 @@ Esito da registrare: Approvato, Bocciato o Da valutare. Se approvato, la fase PE
   {section === 'pipeline' && <div className="space-y-5"><div className="rounded-3xl bg-white border p-5"><h2 className="font-bold text-lg">Flusso comunicazioni</h2><p className="text-gray-600 mt-1">Sposta ogni contatto nello stadio reale. Per ora l’invio resta manuale: il CRM ti aiuta a non perdere prossima azione e storico.</p></div><div className="grid md:grid-cols-2 xl:grid-cols-4 gap-4">{stageGroups.map(({ stage, items }) => <div key={stage} className="rounded-3xl bg-white border p-4"><div className="flex justify-between items-center mb-3"><h3 className="font-semibold">{stage}</h3><span className="text-xs rounded-full bg-stone-100 px-2 py-1">{items.length}</span></div><div className="space-y-3">{items.map((contact) => <button key={contact.id} onClick={() => { setSelectedContactId(contact.id); setSection('contacts') }} className="w-full text-left rounded-2xl border p-3 hover:bg-stone-50"><div className="font-semibold text-sm">{contact.name}</div><div className="text-xs text-gray-500">Priorità {contact.priorityLevel || 'B'} · {contact.category || 'Categoria n/d'}</div><div className="text-xs text-gray-600 mt-2 line-clamp-2">{contact.nextAction || contact.messageAngle || 'Prossima azione da definire'}</div></button>)}{items.length === 0 && <p className="text-sm text-gray-400">Nessun contatto.</p>}</div></div>)}</div></div>}
 
 
-  {section === 'netfree' && <div className="space-y-5"><div className="rounded-3xl bg-white border p-5"><div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4"><div><h2 className="font-bold text-lg">NetFree</h2><p className="text-gray-600 mt-1">Archivio strategico dei lead NetFree. I contatti restano nel database: prima si valuta canale, tono e utilità reale, poi si decide come muoversi senza automatismi e senza snaturare la filosofia del progetto.</p></div><div className="flex flex-wrap gap-2"><label className="rounded-2xl border bg-teal-50 px-4 py-3 text-sm font-semibold text-teal-800 cursor-pointer hover:bg-teal-100"><Upload className="w-4 h-4 inline mr-2" />Import CSV curato<input type="file" accept=".csv,text/csv" onChange={importNetFreeCsv} className="hidden" /></label><button onClick={() => selectedContact && copyNetFreeIntro(selectedContact)} disabled={!selectedContact} className="rounded-2xl border bg-white px-4 py-3 text-sm font-semibold hover:bg-stone-50 disabled:opacity-40">Copia approccio leggero</button></div></div><div className="mt-4 grid md:grid-cols-4 gap-3"><div className="rounded-2xl bg-stone-50 border p-4"><div className="text-xs text-gray-500">Candidati NetFree</div><div className="text-2xl font-bold">{netFreeContacts.length}</div></div><div className="rounded-2xl bg-green-50 border border-green-100 p-4"><div className="text-xs text-green-800">Strategia</div><div className="text-2xl font-bold">{netFreeContacts.filter((contact) => contact.netFreeStage === 'Strategia da definire').length}</div></div><div className="rounded-2xl bg-blue-50 border border-blue-100 p-4"><div className="text-xs text-blue-800">In valutazione</div><div className="text-2xl font-bold">{netFreeContacts.filter((contact) => contact.netFreeStage === 'Primo contatto relazionale' || contact.netFreeStage === 'Dialogo aperto').length}</div></div><div className="rounded-2xl bg-amber-50 border border-amber-100 p-4"><div className="text-xs text-amber-800">Da strategia</div><div className="text-2xl font-bold">{netFreeContacts.filter((contact) => contact.netFreeStage === 'Lead raccolto' || contact.netFreeStage === 'Da qualificare con rispetto').length}</div></div></div></div><div className="grid lg:grid-cols-[1fr_380px] gap-5"><div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">{netFreeStageGroups.map(({ stage, items }) => <div key={stage} className="rounded-3xl bg-white border p-4"><div className="flex justify-between items-center mb-3"><h3 className="font-semibold text-sm">{stage}</h3><span className="text-xs rounded-full bg-stone-100 px-2 py-1">{items.length}</span></div><div className="space-y-3">{items.slice(0, 12).map((contact) => <div key={contact.id} className="rounded-2xl border p-3 hover:bg-stone-50"><button onClick={() => setSelectedContactId(contact.id)} className="w-full text-left"><div className="font-semibold text-sm">{contact.name}</div><div className="text-xs text-gray-500">{contact.netFreePreferredChannel || contact.phone || contact.email || 'Canale da qualificare'} · {contact.netFreePreferredTimeWindow || 'orario da confermare'}</div><div className="text-xs text-gray-600 mt-2 line-clamp-3">{contact.netFreeCandidateReason || contact.netFreeLeadProfile || 'Motivo candidatura da completare'}</div></button><div className="mt-3 flex flex-wrap gap-2"><select value={contact.netFreeStage || 'Non avviato'} onChange={(e) => updateNetFreeStage(contact.id, e.target.value as NetFreeStage)} className="text-xs rounded-xl border px-2 py-2 bg-white">{netFreeStages.map((s) => <option key={s}>{s}</option>)}</select><button onClick={() => copyNetFreeIntro(contact)} className="text-xs rounded-xl border px-2 py-2 hover:bg-white">Consenso</button><button onClick={() => markNetFreeStrategicReview(contact)} className="text-xs rounded-xl border px-2 py-2 text-green-700 hover:bg-green-50">Strategia</button><button onClick={() => copyNetFreeStrategySheet(contact)} className="text-xs rounded-xl border px-2 py-2 text-blue-700 hover:bg-blue-50">Scheda</button></div></div>)}{items.length === 0 && <p className="text-sm text-gray-400">Nessun contatto.</p>}</div></div>)}</div><div className="rounded-3xl bg-white border p-5 h-fit"><h3 className="font-bold">Brief selezionato</h3>{selectedContact ? <div className="mt-4 space-y-3 text-sm"><div><strong>{selectedContact.name}</strong><div className="text-gray-500">{selectedContact.netFreePreferredChannel || 'Canale da qualificare'} · {selectedContact.netFreePreferredPhone || selectedContact.phone || 'numero da verificare'}</div></div><div className="rounded-2xl bg-stone-50 border p-3"><strong>Profilo base</strong><br />{selectedContact.netFreeLeadProfile || selectedContact.researchSummary || 'Da completare'}</div><div className="rounded-2xl bg-stone-50 border p-3"><strong>Fascia e tono</strong><br />{selectedContact.netFreePreferredTimeWindow || 'Orario da confermare'}<br />{selectedContact.netFreeCallTone || 'Tono caldo e rispettoso'}</div><textarea readOnly value={buildNetFreeStrategySheet(selectedContact)} className="w-full min-h-72 rounded-2xl border p-3 text-xs bg-white" /><button onClick={() => navigator.clipboard.writeText(buildNetFreeStrategySheet(selectedContact))} className="w-full rounded-2xl bg-gray-900 text-white py-3 font-semibold hover:bg-gray-800">Copia scheda strategica</button></div> : <p className="text-gray-500 mt-3">Seleziona un contatto NetFree per vedere il scheda strategica.</p>}</div></div></div>}
+  {section === 'netfree' && <div className="space-y-5"><div className="rounded-3xl bg-white border p-5"><div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4"><div><h2 className="font-bold text-lg">NetFree</h2><p className="text-gray-600 mt-1">Archivio strategico dei lead NetFree. I contatti restano nel database: prima si valuta canale, tono e utilità reale, poi si decide come muoversi senza automatismi e senza snaturare la filosofia del progetto.</p></div><div className="flex flex-wrap gap-2"><label className="rounded-2xl border bg-teal-50 px-4 py-3 text-sm font-semibold text-teal-800 cursor-pointer hover:bg-teal-100"><Upload className="w-4 h-4 inline mr-2" />Import dati curati<input type="file" accept=".csv,.json,text/csv,application/json" onChange={importNetFreeCsv} className="hidden" /></label><button onClick={() => selectedContact && copyNetFreeIntro(selectedContact)} disabled={!selectedContact} className="rounded-2xl border bg-white px-4 py-3 text-sm font-semibold hover:bg-stone-50 disabled:opacity-40">Copia approccio leggero</button></div></div><div className="mt-4 grid md:grid-cols-4 gap-3"><div className="rounded-2xl bg-stone-50 border p-4"><div className="text-xs text-gray-500">Candidati NetFree</div><div className="text-2xl font-bold">{netFreeContacts.length}</div></div><div className="rounded-2xl bg-green-50 border border-green-100 p-4"><div className="text-xs text-green-800">Strategia</div><div className="text-2xl font-bold">{netFreeContacts.filter((contact) => contact.netFreeStage === 'Strategia da definire').length}</div></div><div className="rounded-2xl bg-blue-50 border border-blue-100 p-4"><div className="text-xs text-blue-800">In valutazione</div><div className="text-2xl font-bold">{netFreeContacts.filter((contact) => contact.netFreeStage === 'Primo contatto relazionale' || contact.netFreeStage === 'Dialogo aperto').length}</div></div><div className="rounded-2xl bg-amber-50 border border-amber-100 p-4"><div className="text-xs text-amber-800">Da strategia</div><div className="text-2xl font-bold">{netFreeContacts.filter((contact) => contact.netFreeStage === 'Lead raccolto' || contact.netFreeStage === 'Da qualificare con rispetto').length}</div></div></div></div><div className="grid lg:grid-cols-[1fr_380px] gap-5"><div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">{netFreeStageGroups.map(({ stage, items }) => <div key={stage} className="rounded-3xl bg-white border p-4"><div className="flex justify-between items-center mb-3"><h3 className="font-semibold text-sm">{stage}</h3><span className="text-xs rounded-full bg-stone-100 px-2 py-1">{items.length}</span></div><div className="space-y-3">{items.slice(0, 12).map((contact) => <div key={contact.id} className="rounded-2xl border p-3 hover:bg-stone-50"><button onClick={() => setSelectedContactId(contact.id)} className="w-full text-left"><div className="font-semibold text-sm">{contact.name}</div><div className="text-xs text-gray-500">{contact.netFreePreferredChannel || contact.phone || contact.email || 'Canale da qualificare'} · {contact.netFreePreferredTimeWindow || 'orario da confermare'}</div><div className="text-xs text-gray-600 mt-2 line-clamp-3">{contact.netFreeCandidateReason || contact.netFreeLeadProfile || 'Motivo candidatura da completare'}</div></button><div className="mt-3 flex flex-wrap gap-2"><select value={contact.netFreeStage || 'Non avviato'} onChange={(e) => updateNetFreeStage(contact.id, e.target.value as NetFreeStage)} className="text-xs rounded-xl border px-2 py-2 bg-white">{netFreeStages.map((s) => <option key={s}>{s}</option>)}</select><button onClick={() => copyNetFreeIntro(contact)} className="text-xs rounded-xl border px-2 py-2 hover:bg-white">Consenso</button><button onClick={() => markNetFreeStrategicReview(contact)} className="text-xs rounded-xl border px-2 py-2 text-green-700 hover:bg-green-50">Strategia</button><button onClick={() => copyNetFreeStrategySheet(contact)} className="text-xs rounded-xl border px-2 py-2 text-blue-700 hover:bg-blue-50">Scheda</button></div></div>)}{items.length === 0 && <p className="text-sm text-gray-400">Nessun contatto.</p>}</div></div>)}</div><div className="rounded-3xl bg-white border p-5 h-fit"><h3 className="font-bold">Brief selezionato</h3>{selectedContact ? <div className="mt-4 space-y-3 text-sm"><div><strong>{selectedContact.name}</strong><div className="text-gray-500">{selectedContact.netFreePreferredChannel || 'Canale da qualificare'} · {selectedContact.netFreePreferredPhone || selectedContact.phone || 'numero da verificare'}</div></div><div className="rounded-2xl bg-stone-50 border p-3"><strong>Profilo base</strong><br />{selectedContact.netFreeLeadProfile || selectedContact.researchSummary || 'Da completare'}</div><div className="rounded-2xl bg-stone-50 border p-3"><strong>Fascia e tono</strong><br />{selectedContact.netFreePreferredTimeWindow || 'Orario da confermare'}<br />{selectedContact.netFreeCallTone || 'Tono caldo e rispettoso'}</div><textarea readOnly value={buildNetFreeStrategySheet(selectedContact)} className="w-full min-h-72 rounded-2xl border p-3 text-xs bg-white" /><button onClick={() => navigator.clipboard.writeText(buildNetFreeStrategySheet(selectedContact))} className="w-full rounded-2xl bg-gray-900 text-white py-3 font-semibold hover:bg-gray-800">Copia scheda strategica</button></div> : <p className="text-gray-500 mt-3">Seleziona un contatto NetFree per vedere il scheda strategica.</p>}</div></div></div>}
 
 
   {section === 'lcr' && <div className="space-y-5"><div className="rounded-3xl bg-white border p-5"><div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4"><div><h2 className="font-bold text-lg">LCR · selezione relazionale e matrice 6x6</h2><p className="text-gray-600 mt-1">Implementazione aggiornata del file 7: il CRM guida vocale, agenda, Zoom da 15 minuti, selezione valoriale e posizionamento nella matrice. Ogni invio resta manuale e presidiato: il sistema prepara script, task e stati, senza automatismi che possano intaccare la filosofia del progetto.</p></div><button onClick={() => selectedContact && setLcrOutcome(selectedContact, 'Da valutare')} disabled={!selectedContact} className="rounded-2xl border bg-white px-4 py-3 text-sm font-semibold hover:bg-stone-50 disabled:opacity-40">Includi selezionato in LCR</button></div><div className="mt-4 grid md:grid-cols-4 gap-3"><div className="rounded-2xl bg-stone-50 border p-4"><div className="text-xs text-gray-500">In pipeline LCR</div><div className="text-2xl font-bold">{lcrContacts.length}</div></div><div className="rounded-2xl bg-green-50 border border-green-100 p-4"><div className="text-xs text-green-800">Approvati</div><div className="text-2xl font-bold">{lcrApprovedContacts.length}</div></div><div className="rounded-2xl bg-blue-50 border border-blue-100 p-4"><div className="text-xs text-blue-800">Matrice 6x6</div><div className="text-2xl font-bold">{lcrMatrixPreview.length}/6 diretti</div></div><div className="rounded-2xl bg-amber-50 border border-amber-100 p-4"><div className="text-xs text-amber-800">Task aperti</div><div className="text-2xl font-bold">{openTasks.filter((task) => task.title.toLowerCase().includes('lcr') || task.title.toLowerCase().includes('pef')).length}</div></div></div></div><div className="grid lg:grid-cols-[1fr_420px] gap-5"><div className="space-y-5"><div className="rounded-3xl bg-white border p-5"><h3 className="font-bold mb-3">Contatto e profilazione</h3><select value={selectedContact?.id || ''} onChange={(e) => setSelectedContactId(e.target.value)} className="w-full rounded-2xl border px-4 py-3 mb-4 bg-white"><option value="">Seleziona contatto</option>{contacts.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>{selectedContact ? <div className="grid md:grid-cols-2 gap-3 text-sm"><label className="space-y-1"><span className="text-xs font-semibold text-gray-500">Fascia disponibilità</span><select value={selectedContact.lcrAvailabilityWindow || 'Da definire'} onChange={(e) => updateLcrContact(selectedContact.id, { lcrAvailabilityWindow: e.target.value as LcrAvailabilityWindow })} className="w-full rounded-2xl border px-3 py-3 bg-white">{lcrAvailabilityWindows.map((item) => <option key={item}>{item}</option>)}</select></label><label className="space-y-1"><span className="text-xs font-semibold text-gray-500">Fascia personalizzata</span><input value={selectedContact.lcrCustomAvailability || ''} onChange={(e) => updateLcrContact(selectedContact.id, { lcrCustomAvailability: e.target.value })} className="w-full rounded-2xl border px-3 py-3" placeholder="es. lunedì 18:00-19:00" /></label><label className="space-y-1 md:col-span-2"><span className="text-xs font-semibold text-gray-500">Link agenda</span><input value={selectedContact.lcrAgendaLink || ''} onChange={(e) => updateLcrContact(selectedContact.id, { lcrAgendaLink: e.target.value })} className="w-full rounded-2xl border px-3 py-3" placeholder="Link agenda con massimo 3 appuntamenti/ora" /></label><label className="space-y-1 md:col-span-2"><span className="text-xs font-semibold text-gray-500">Link Zoom dinamico</span><input value={selectedContact.lcrZoomLink || ''} onChange={(e) => updateLcrContact(selectedContact.id, { lcrZoomLink: e.target.value })} className="w-full rounded-2xl border px-3 py-3" placeholder="Link Zoom dell'appuntamento, non PMI fisso" /></label></div> : <p className="text-gray-500">Seleziona un contatto per lavorare sulla scheda LCR.</p>}</div>{selectedContact && <div className="rounded-3xl bg-white border p-5"><h3 className="font-bold mb-3">Script manuali e passaggi</h3><div className="grid md:grid-cols-3 gap-2"><button onClick={() => copyLcrText(buildLcrVoiceScript(selectedContact), 'Vocale LCR copiato')} className="rounded-2xl border bg-white px-3 py-3 text-sm font-semibold hover:bg-stone-50">Copia vocale</button><button onClick={() => copyLcrText(buildLcrAgendaMessage(selectedContact), 'Messaggio agenda copiato')} className="rounded-2xl border bg-white px-3 py-3 text-sm font-semibold hover:bg-stone-50">Copia agenda</button><button onClick={() => copyLcrText(buildLcrZoomGuide(selectedContact), 'Guida Zoom copiata')} className="rounded-2xl border bg-white px-3 py-3 text-sm font-semibold hover:bg-stone-50">Copia guida Zoom</button><button onClick={() => markLcrManualStep(selectedContact, 'voice')} className="rounded-2xl bg-blue-700 text-white px-3 py-3 text-sm font-semibold hover:bg-blue-800">Vocale inviato manualmente</button><button onClick={() => markLcrManualStep(selectedContact, 'positive')} className="rounded-2xl bg-green-700 text-white px-3 py-3 text-sm font-semibold hover:bg-green-800">Risposta positiva</button><button onClick={() => markLcrManualStep(selectedContact, 'zoom')} className="rounded-2xl bg-gray-900 text-white px-3 py-3 text-sm font-semibold hover:bg-gray-800">Zoom completata</button></div><div className="mt-4 rounded-2xl bg-amber-50 border border-amber-100 p-4 text-sm text-amber-950"><strong>Regola file 7:</strong> la Zoom dura 15 minuti, gli slot sono tassativi, il link Zoom deve essere dinamico per appuntamento e il passaggio PEF è un task interno da confermare manualmente.</div></div>}<div className="rounded-3xl bg-white border p-5"><h3 className="font-bold mb-3">Matrice forzata 6x6</h3><div className="overflow-auto"><table className="w-full text-sm"><thead><tr className="text-left text-gray-500"><th className="py-2">Pos.</th><th>Lead</th><th>Livello</th><th>Slot</th><th>Padre operativo</th></tr></thead><tbody>{lcrMatrixPreview.slice(0, 42).map(({ contact, position, placement, parent }) => <tr key={contact.id} className="border-t"><td className="py-2 font-semibold">{position}</td><td>{contact.name}</td><td>{placement.level}</td><td>{placement.slot}</td><td>{parent?.name || 'Radice progetto'}</td></tr>)}{lcrMatrixPreview.length === 0 && <tr><td colSpan={5} className="py-4 text-gray-500">Nessun approvato ancora posizionato.</td></tr>}</tbody></table></div><p className="text-xs text-gray-500 mt-3">La regola applicata è bilanciata e lineare: il 7° va sotto il 1°, l'8° sotto il 2°, fino al riempimento progressivo dei livelli successivi.</p></div></div><div className="rounded-3xl bg-white border p-5 h-fit"><h3 className="font-bold">Scheda selezione</h3>{selectedContact ? <div className="mt-4 space-y-3 text-sm"><div><strong>{selectedContact.name}</strong><div className="text-gray-500">{selectedContact.phone || selectedContact.email || 'canale da completare'}</div></div><div className="grid grid-cols-2 gap-2">{([['Vocale ascoltato','lcrPrequalVoiceListened'], ['Etica','lcrEthicsAligned'], ['Mentalità','lcrMindsetAligned'], ['NetFree','lcrNetFreeAligned'], ['Tokenizzazione','lcrTokenizationAligned']] as const).map(([label, key]) => <label key={key} className="space-y-1"><span className="text-xs font-semibold text-gray-500">{label}</span><select value={(selectedContact[key] as LcrAlignmentFlag) || 'Da valutare'} onChange={(e) => updateLcrContact(selectedContact.id, { [key]: e.target.value } as Partial<Contact>)} className="w-full rounded-xl border px-2 py-2 bg-white">{lcrAlignmentFlags.map((item) => <option key={item}>{item}</option>)}</select></label>)}</div><label className="space-y-1 block"><span className="text-xs font-semibold text-gray-500">Esito selezione</span><select value={selectedContact.lcrSelectionOutcome || 'Da valutare'} onChange={(e) => setLcrOutcome(selectedContact, e.target.value as LcrSelectionOutcome)} className="w-full rounded-2xl border px-3 py-3 bg-white">{lcrSelectionOutcomes.map((item) => <option key={item}>{item}</option>)}</select></label><label className="space-y-1 block"><span className="text-xs font-semibold text-gray-500">Stato task PEF</span><select value={selectedContact.lcrPefDelegationStatus || 'Non avviata'} onChange={(e) => updateLcrContact(selectedContact.id, { lcrPefDelegationStatus: e.target.value as LcrPefDelegationStatus })} className="w-full rounded-2xl border px-3 py-3 bg-white">{lcrPefDelegationStatuses.map((item) => <option key={item}>{item}</option>)}</select></label><textarea value={selectedContact.lcrSelectionNotes || ''} onChange={(e) => updateLcrContact(selectedContact.id, { lcrSelectionNotes: e.target.value })} className="w-full min-h-28 rounded-2xl border p-3" placeholder="Note selezione, segnali di allineamento, dubbi o motivi di rinvio..." /><textarea value={selectedContact.lcrPefTechnicianNote || ''} onChange={(e) => updateLcrContact(selectedContact.id, { lcrPefTechnicianNote: e.target.value })} className="w-full min-h-24 rounded-2xl border p-3" placeholder="Nota interna per eventuale tecnico PEF, da usare solo dopo conferma manuale..." /><div className="rounded-2xl bg-stone-50 border p-3"><strong>Matrice:</strong><br />Posizione {selectedContact.lcrMatrixPosition || 0} · livello {selectedContact.lcrMatrixLevel || 0} · slot {selectedContact.lcrMatrixSlot || 0}</div><div className="grid grid-cols-3 gap-2"><button onClick={() => copyLcrText(buildLcrOutcomeMessage(selectedContact, 'Approvato'), 'Messaggio approvato copiato')} className="rounded-xl border px-2 py-2 text-xs hover:bg-stone-50">Copia OK</button><button onClick={() => copyLcrText(buildLcrOutcomeMessage(selectedContact, 'Bocciato'), 'Messaggio bocciato copiato')} className="rounded-xl border px-2 py-2 text-xs hover:bg-stone-50">Copia no</button><button onClick={() => copyLcrText(buildLcrOutcomeMessage(selectedContact, 'Da valutare'), 'Messaggio attesa copiato')} className="rounded-xl border px-2 py-2 text-xs hover:bg-stone-50">Copia attesa</button></div></div> : <p className="text-gray-500 mt-3">Seleziona un contatto per compilare la selezione LCR.</p>}</div></div></div>}
