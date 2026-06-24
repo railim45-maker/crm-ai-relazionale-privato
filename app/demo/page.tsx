@@ -874,6 +874,7 @@ export default function DemoAppPage() {
   const [answer, setAnswer] = useState('Carica il primo batch o inserisci i tuoi contatti qualificati: userò quei dati per suggerire priorità, follow-up e prossime azioni.')
   const [search, setSearch] = useState('')
   const [netFreeListQuery, setNetFreeListQuery] = useState('')
+  const [netFreeArchiveLoading, setNetFreeArchiveLoading] = useState(false)
   const [mailingPriority, setMailingPriority] = useState<MailingPriorityFilter>('A')
   const [mailingStage, setMailingStage] = useState<MailingStageFilter>('Tutti')
   const [mailingSeparator, setMailingSeparator] = useState<MailingSeparator>('punto e virgola')
@@ -2439,75 +2440,93 @@ Esito da registrare: Approvato, Bocciato o Da valutare. Se approvato, la fase PE
     } as Contact)
   }
 
+  function processNetFreeImportRaw(rawInput: string, sourceLabel = 'file selezionato') {
+    const raw = String(rawInput || '').trim()
+    if (!raw) throw new Error('file vuoto')
+    const timestamp = nowIso()
+    let records: Record<string, any>[] = []
+    if (raw.startsWith('{') || raw.startsWith('[')) {
+      const parsed = JSON.parse(raw)
+      records = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray(parsed.contacts)
+          ? parsed.contacts
+          : Array.isArray(parsed.leads)
+            ? parsed.leads
+            : Array.isArray(parsed.records)
+              ? parsed.records
+              : Array.isArray(parsed.items)
+                ? parsed.items
+                : Array.isArray(parsed.data)
+                  ? parsed.data
+                  : []
+    } else {
+      const delimiter = detectCsvDelimiter(raw)
+      const rows = parseCsvRows(raw, delimiter)
+      const [headers, ...dataRows] = rows
+      if (!headers?.length) throw new Error('CSV vuoto')
+      const normalizedHeaders = headers.map((header) => header.trim()).map((header, index) => header || `__empty_${index}`)
+      records = dataRows.map((row) => Object.fromEntries(normalizedHeaders.map((header, index) => [header, row[index]?.trim() || '']).filter(([header]) => !String(header).startsWith('__empty_'))))
+    }
+    const importedContacts = records
+      .filter((record) => record && typeof record === 'object' && !Array.isArray(record))
+      .map((record, index) => netFreeContactFromRecord(record, index, timestamp))
+      .filter((contact) => String(contact.name || '').trim())
+    if (importedContacts.length === 0) throw new Error('nessun lead riconosciuto')
+    const existing = new Set(contacts.map(netFreeDedupeKey))
+    const fresh = importedContacts.filter((contact) => {
+      const key = netFreeDedupeKey(contact)
+      if (existing.has(key)) return false
+      existing.add(key)
+      return true
+    })
+    const skipped = importedContacts.length - fresh.length
+    if (fresh.length > 0) {
+      const netFreeTaskLimit = 25
+      const nextContacts = [...fresh, ...contacts].map(normalizeContact)
+      if (fresh.length > MASSIVE_NETFREE_IMPORT_THRESHOLD) {
+        netFreeImportGuardUntilRef.current = Date.now() + NETFREE_IMPORT_GUARD_MS
+        setCloudReady(false)
+        setCloudStatus('salvataggio')
+        setCloudMessage('Import NetFree massivo completato: preparo la sincronizzazione Supabase a blocchi. Se il database non è ancora configurato, i lead restano visibili in sessione e puoi esportare un Backup.')
+      }
+      setContacts(nextContacts)
+      setSelectedContactId(fresh[0].id)
+      setTasks((current) => [
+        ...fresh.slice(0, netFreeTaskLimit).map((contact) => ({ id: id('task'), title: `Qualificare lead NetFree ${contact.name}: completare dati base e strategia di contatto`, contactId: contact.id, priority: contact.priorityLevel === 'A' ? 'Alta' as Priority : 'Media' as Priority, due: addDays(2), completed: false, createdAt: timestamp })),
+        ...current,
+      ])
+      if (fresh.length > MASSIVE_NETFREE_IMPORT_THRESHOLD) {
+        void syncCloudContacts(nextContacts, `Import NetFree completato: avvio salvataggio Supabase a blocchi per ${nextContacts.length} contatti.`)
+      }
+    }
+    setSection('netfree')
+    setAnswer(fresh.length > 0
+      ? `Import NetFree completato da ${sourceLabel}: ${fresh.length} nuovi lead aggiunti, ${skipped} duplicati saltati. Totale candidati NetFree dopo l’import: ${netFreeContacts.length + fresh.length}. Trovi la lista nella sezione NetFree, sotto “Lista contatti importati”. Ho selezionato il primo lead importato. Se Supabase è configurato, il CRM avvia il salvataggio cloud a blocchi; in caso contrario esporta subito un Backup.`
+      : `Import NetFree letto correttamente da ${sourceLabel}, ma non ho aggiunto nuovi lead: le ${importedContacts.length} righe risultano già presenti in questo profilo. Se vuoi ricaricare da zero, usa Reset oppure importa in un profilo nuovo.`)
+  }
+
+  async function loadBundledNetFreeArchive() {
+    setNetFreeArchiveLoading(true)
+    try {
+      const response = await fetch('/data/netfree-unified-contacts.json', { cache: 'no-store' })
+      if (!response.ok) throw new Error(`archivio pubblico non trovato (${response.status}). Verifica che il file sia in public/data/netfree-unified-contacts.json`)
+      const raw = await response.text()
+      processNetFreeImportRaw(raw, 'archivio pubblico NetFree')
+    } catch (error: any) {
+      window.alert(`Non riesco a caricare l’archivio NetFree automatico. Metti netfree-unified-contacts.json in public/data oppure usa Import NetFree dati. Dettaglio: ${error?.message || 'errore sconosciuto'}`)
+    } finally {
+      setNetFreeArchiveLoading(false)
+    }
+  }
+
   function importNetFreeCsv(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
     if (!file) return
     const reader = new FileReader()
     reader.onload = () => {
       try {
-        const raw = String(reader.result || '').trim()
-        if (!raw) throw new Error('file vuoto')
-        const timestamp = nowIso()
-        let records: Record<string, any>[] = []
-        if (raw.startsWith('{') || raw.startsWith('[')) {
-          const parsed = JSON.parse(raw)
-          records = Array.isArray(parsed)
-            ? parsed
-            : Array.isArray(parsed.contacts)
-              ? parsed.contacts
-              : Array.isArray(parsed.leads)
-                ? parsed.leads
-                : Array.isArray(parsed.records)
-                  ? parsed.records
-                  : Array.isArray(parsed.items)
-                    ? parsed.items
-                    : Array.isArray(parsed.data)
-                      ? parsed.data
-                      : []
-        } else {
-          const delimiter = detectCsvDelimiter(raw)
-          const rows = parseCsvRows(raw, delimiter)
-          const [headers, ...dataRows] = rows
-          if (!headers?.length) throw new Error('CSV vuoto')
-          const normalizedHeaders = headers.map((header) => header.trim()).map((header, index) => header || `__empty_${index}`)
-          records = dataRows.map((row) => Object.fromEntries(normalizedHeaders.map((header, index) => [header, row[index]?.trim() || '']).filter(([header]) => !String(header).startsWith('__empty_'))))
-        }
-        const importedContacts = records
-          .filter((record) => record && typeof record === 'object' && !Array.isArray(record))
-          .map((record, index) => netFreeContactFromRecord(record, index, timestamp))
-          .filter((contact) => String(contact.name || '').trim())
-        if (importedContacts.length === 0) throw new Error('nessun lead riconosciuto')
-        const existing = new Set(contacts.map(netFreeDedupeKey))
-        const fresh = importedContacts.filter((contact) => {
-          const key = netFreeDedupeKey(contact)
-          if (existing.has(key)) return false
-          existing.add(key)
-          return true
-        })
-        const skipped = importedContacts.length - fresh.length
-        if (fresh.length > 0) {
-          const netFreeTaskLimit = 25
-          const nextContacts = [...fresh, ...contacts].map(normalizeContact)
-          if (fresh.length > MASSIVE_NETFREE_IMPORT_THRESHOLD) {
-            netFreeImportGuardUntilRef.current = Date.now() + NETFREE_IMPORT_GUARD_MS
-            setCloudReady(false)
-            setCloudStatus('salvataggio')
-            setCloudMessage('Import NetFree massivo completato: preparo la sincronizzazione Supabase a blocchi. Se il database non è ancora configurato, i lead restano visibili in sessione e puoi esportare un Backup.')
-          }
-          setContacts(nextContacts)
-          setSelectedContactId(fresh[0].id)
-          setTasks((current) => [
-            ...fresh.slice(0, netFreeTaskLimit).map((contact) => ({ id: id('task'), title: `Qualificare lead NetFree ${contact.name}: completare dati base e strategia di contatto`, contactId: contact.id, priority: contact.priorityLevel === 'A' ? 'Alta' as Priority : 'Media' as Priority, due: addDays(2), completed: false, createdAt: timestamp })),
-            ...current,
-          ])
-          if (fresh.length > MASSIVE_NETFREE_IMPORT_THRESHOLD) {
-            void syncCloudContacts(nextContacts, `Import NetFree completato: avvio salvataggio Supabase a blocchi per ${nextContacts.length} contatti.`)
-          }
-        }
-        setSection('netfree')
-        setAnswer(fresh.length > 0
-          ? `Import NetFree completato: ${fresh.length} nuovi lead aggiunti, ${skipped} duplicati saltati. Totale candidati NetFree dopo l’import: ${netFreeContacts.length + fresh.length}. Trovi la lista nella sezione NetFree, sotto “Lista contatti importati”. Ho selezionato il primo lead importato. Se Supabase è configurato, il CRM avvia il salvataggio cloud a blocchi; in caso contrario esporta subito un Backup.`
-          : `Import NetFree letto correttamente, ma non ho aggiunto nuovi lead: le ${importedContacts.length} righe risultano già presenti in questo profilo. Se vuoi ricaricare da zero, usa Reset oppure importa in un profilo nuovo.`)
+        processNetFreeImportRaw(String(reader.result || ''), file.name || 'file selezionato')
       } catch (error: any) {
         window.alert(`File NetFree non valido o non leggibile. Usa CSV o JSON curato. Dettaglio: ${error?.message || 'formato non riconosciuto'}`)
       } finally {
@@ -2555,7 +2574,7 @@ Esito da registrare: Approvato, Bocciato o Da valutare. Se approvato, la fase PE
   const nav = [{ id: 'dashboard', label: 'Dashboard', icon: TrendingUp }, { id: 'contacts', label: 'Database 100', icon: Users }, { id: 'calendar', label: 'Calendario', icon: CalendarDays }, { id: 'pipeline', label: 'Flusso', icon: ChevronRight }, { id: 'conversations', label: 'Comunicazioni', icon: Upload }, { id: 'research', label: 'Ricerca guidata', icon: Search }, { id: 'study', label: 'Studio su misura', icon: Calculator }, { id: 'netfree', label: 'NetFree', icon: Phone }, { id: 'lcr', label: 'LCR 6x6', icon: CheckSquare }, { id: 'team', label: 'Soci e rete', icon: UserPlus }, { id: 'investors', label: 'Investitori', icon: TrendingUp }, { id: 'documents', label: 'Contratti e LOI', icon: ClipboardList }, { id: 'materials', label: 'Materiali', icon: ClipboardList }, { id: 'mailing', label: 'Mailing CCN', icon: Mail }, { id: 'agent', label: 'Agente', icon: Bot }] as const
 
   return (
-    <div className="min-h-screen bg-[#f7f6f1] text-gray-900"><div className="flex min-h-screen"><aside className="hidden md:flex w-72 flex-col border-r border-stone-200 bg-white/90 p-5"><div className="flex items-center gap-3 mb-8"><div className="w-10 h-10 rounded-2xl bg-blue-100 text-blue-700 flex items-center justify-center font-bold">AI</div><div><div className="font-bold text-lg">RelazioneCRM</div><div className="text-xs text-gray-500">Database privato</div></div></div><nav className="space-y-2">{nav.map((item) => { const Icon = item.icon; return <button key={item.id} onClick={() => setSection(item.id)} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition ${section === item.id ? 'bg-blue-50 text-blue-700 font-semibold' : 'hover:bg-stone-100 text-gray-700'}`}><Icon className="w-4 h-4" /> {item.label}</button> })}</nav><div className="mt-auto rounded-2xl bg-green-50 border border-green-200 p-4 text-sm text-green-900"><strong className="block mb-1">Uso privato operativo</strong>Database cloud se autenticato; fallback locale con backup se il collegamento non è disponibile.</div></aside><main className="flex-1 p-3 pb-28 md:p-8 md:pb-8 max-w-7xl mx-auto w-full"><header className="flex flex-col lg:flex-row lg:items-center gap-4 justify-between mb-8"><div><h1 className="text-3xl font-bold tracking-tight">CRM privato · 100 contatti qualificati</h1><p className="text-gray-500 mt-1">Gestisci lead premium, comunicazioni, follow-up e backup. Se il database è collegato, i contatti restano persistenti dopo ogni riapertura.</p><div className="mt-3 flex flex-col sm:flex-row gap-2"><div className={`inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-semibold ${cloudStatus === 'cloud' ? 'bg-green-50 border-green-200 text-green-800' : cloudStatus === 'salvataggio' ? 'bg-blue-50 border-blue-200 text-blue-800' : cloudStatus === 'locale' ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-red-50 border-red-200 text-red-800'}`}><Database className="w-4 h-4 shrink-0" /><span>{cloudMessage}</span></div><div className={`inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-semibold ${authEmail ? 'bg-slate-50 border-slate-200 text-slate-800' : 'bg-amber-50 border-amber-200 text-amber-800'}`}><ShieldCheck className="w-4 h-4 shrink-0" />{authEmail ? `Accesso: ${authEmail}` : 'Accesso non rilevato: usa login per lavorare in cloud'}</div><select value={currentRole} onChange={(e) => setCurrentRole(e.target.value as UserRole)} className="rounded-2xl border px-3 py-2 text-xs font-semibold bg-white" aria-label="Ruolo operativo">{userRoles.map((role) => <option key={role} value={role}>{role}</option>)}</select></div></div><div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2"><select value={section} onChange={(e) => setSection(e.target.value as Section)} className="md:hidden col-span-2 sm:col-span-1 rounded-xl border bg-white px-3 py-3 text-sm font-semibold" aria-label="Sezione CRM">{nav.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select><button onClick={importMilanoBatch1} className="px-4 py-2 rounded-xl bg-blue-700 text-white hover:bg-blue-800 text-sm inline-flex items-center gap-2"><Database className="w-4 h-4" />Carica Batch Milano 1</button><button onClick={exportData} className="px-4 py-2 rounded-xl border bg-white hover:bg-stone-50 text-sm inline-flex items-center gap-2"><Download className="w-4 h-4" />Backup</button><label className="px-4 py-2 rounded-xl border bg-white hover:bg-stone-50 text-sm inline-flex items-center gap-2 cursor-pointer"><Upload className="w-4 h-4" />Importa<input type="file" accept="application/json" onChange={importData} className="hidden" /></label><label className="px-4 py-2 rounded-xl border bg-teal-50 hover:bg-teal-100 text-teal-800 text-sm inline-flex items-center gap-2 cursor-pointer"><Database className="w-4 h-4" />Import NetFree dati<input type="file" accept=".csv,.json,text/csv,application/json" onChange={importNetFreeCsv} className="hidden" /></label><button onClick={clearAllData} className="px-4 py-2 rounded-xl border bg-white hover:bg-red-50 text-sm text-red-700 inline-flex items-center gap-2 justify-center"><Trash2 className="w-4 h-4" />Reset</button>{authEmail ? <button onClick={signOutFromDemo} className="col-span-2 sm:col-span-1 px-4 py-2 rounded-xl border bg-white hover:bg-stone-50 text-sm inline-flex items-center gap-2 justify-center"><LogOut className="w-4 h-4" />Esci</button> : <button onClick={goToLogin} className="col-span-2 sm:col-span-1 px-4 py-2 rounded-xl bg-gray-900 text-white hover:bg-black text-sm inline-flex items-center gap-2 justify-center"><LogIn className="w-4 h-4" />Accedi</button>}</div></header><section className="mb-8 rounded-3xl border bg-white p-5"><div className="flex flex-col xl:flex-row xl:items-end gap-4 justify-between"><div><div className="flex items-center gap-2 text-sm font-semibold text-blue-800"><ShieldCheck className="w-4 h-4" /> Profili separati per te e soci</div><p className="text-gray-600 mt-1">Profilo attivo: <strong>{activeProfile?.name || 'Profilo locale'}</strong>. Con database attivo i contatti vengono ricaricati dal cloud; in modalità locale usa Backup/Importa per non perdere dati.</p></div><div className="flex flex-col md:flex-row gap-2 md:items-center"><select value={activeProfileId} onChange={(e) => switchProfile(e.target.value)} className="rounded-2xl border px-4 py-3 bg-white min-w-48">{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select><div className="flex gap-2"><input value={newProfileName} onChange={(e) => setNewProfileName(e.target.value)} className="rounded-2xl border px-4 py-3 w-48" placeholder="Nome socio/profilo" /><button onClick={createProfile} className="rounded-2xl bg-blue-700 text-white px-4 py-3 font-semibold hover:bg-blue-800"><UserPlus className="w-4 h-4 inline mr-2" />Crea</button></div></div></div>{isAdmin && <div className="mt-5 rounded-3xl border border-blue-100 bg-blue-50 p-4"><div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4"><div><div className="text-sm font-bold text-blue-900">Permessi servizi/materiali per profilo attivo</div><p className="text-sm text-blue-900/80 mt-1">Decidi quali servizi e documenti un socio o collaboratore può aprire e condividere. L’amministratore vede sempre tutto; i profili non amministratori vedono solo i materiali autorizzati.</p></div><select value={activeProfile?.role || 'Collaboratore'} onChange={(e) => activeProfile && updateProfilePermissions(activeProfile.id, { role: e.target.value as UserRole, allowedMaterialIds: e.target.value === 'Amministratore' ? allMaterialIds : activeProfile.allowedMaterialIds })} className="rounded-2xl border px-4 py-3 bg-white min-w-48">{userRoles.map((role) => <option key={role} value={role}>{role}</option>)}</select></div><div className="mt-4 grid md:grid-cols-2 xl:grid-cols-3 gap-3">{networkMaterials.map((material) => { const checked = activeProfile?.role === 'Amministratore' || !!activeProfile?.allowedMaterialIds?.includes(material.id); return <label key={material.id} className={`rounded-2xl border p-3 bg-white flex items-start gap-3 ${checked ? 'border-blue-200' : 'border-stone-200 opacity-75'}`}><input type="checkbox" checked={checked} disabled={!activeProfile || activeProfile.role === 'Amministratore'} onChange={() => activeProfile && toggleProfileMaterial(activeProfile.id, material.id)} className="mt-1" /><span><span className="block text-sm font-bold">{material.area}</span><span className="block text-xs text-gray-600">{material.title}</span></span></label> })}</div><textarea value={activeProfile?.permissionNotes || ''} onChange={(e) => activeProfile && updateProfilePermissions(activeProfile.id, { permissionNotes: e.target.value })} className="mt-4 w-full rounded-2xl border p-3 text-sm bg-white" placeholder="Note interne sui permessi: es. può condividere solo VoiceDesk e PEF cliente; Blotix solo dopo autorizzazione admin..." /></div>}
+    <div className="min-h-screen bg-[#f7f6f1] text-gray-900"><div className="flex min-h-screen"><aside className="hidden md:flex w-72 flex-col border-r border-stone-200 bg-white/90 p-5"><div className="flex items-center gap-3 mb-8"><div className="w-10 h-10 rounded-2xl bg-blue-100 text-blue-700 flex items-center justify-center font-bold">AI</div><div><div className="font-bold text-lg">RelazioneCRM</div><div className="text-xs text-gray-500">Database privato</div></div></div><nav className="space-y-2">{nav.map((item) => { const Icon = item.icon; return <button key={item.id} onClick={() => setSection(item.id)} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition ${section === item.id ? 'bg-blue-50 text-blue-700 font-semibold' : 'hover:bg-stone-100 text-gray-700'}`}><Icon className="w-4 h-4" /> {item.label}</button> })}</nav><div className="mt-auto rounded-2xl bg-green-50 border border-green-200 p-4 text-sm text-green-900"><strong className="block mb-1">Uso privato operativo</strong>Database cloud se autenticato; fallback locale con backup se il collegamento non è disponibile.</div></aside><main className="flex-1 p-3 pb-28 md:p-8 md:pb-8 max-w-7xl mx-auto w-full"><header className="flex flex-col lg:flex-row lg:items-center gap-4 justify-between mb-8"><div><h1 className="text-3xl font-bold tracking-tight">CRM privato · 100 contatti qualificati</h1><p className="text-gray-500 mt-1">Gestisci lead premium, comunicazioni, follow-up e backup. Se il database è collegato, i contatti restano persistenti dopo ogni riapertura.</p><div className="mt-3 flex flex-col sm:flex-row gap-2"><div className={`inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-semibold ${cloudStatus === 'cloud' ? 'bg-green-50 border-green-200 text-green-800' : cloudStatus === 'salvataggio' ? 'bg-blue-50 border-blue-200 text-blue-800' : cloudStatus === 'locale' ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-red-50 border-red-200 text-red-800'}`}><Database className="w-4 h-4 shrink-0" /><span>{cloudMessage}</span></div><div className={`inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-semibold ${authEmail ? 'bg-slate-50 border-slate-200 text-slate-800' : 'bg-amber-50 border-amber-200 text-amber-800'}`}><ShieldCheck className="w-4 h-4 shrink-0" />{authEmail ? `Accesso: ${authEmail}` : 'Modalità locale attiva: login serve solo per cloud'}</div><select value={currentRole} onChange={(e) => setCurrentRole(e.target.value as UserRole)} className="rounded-2xl border px-3 py-2 text-xs font-semibold bg-white" aria-label="Ruolo operativo">{userRoles.map((role) => <option key={role} value={role}>{role}</option>)}</select></div></div><div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2"><select value={section} onChange={(e) => setSection(e.target.value as Section)} className="md:hidden col-span-2 sm:col-span-1 rounded-xl border bg-white px-3 py-3 text-sm font-semibold" aria-label="Sezione CRM">{nav.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select><button onClick={importMilanoBatch1} className="px-4 py-2 rounded-xl bg-blue-700 text-white hover:bg-blue-800 text-sm inline-flex items-center gap-2"><Database className="w-4 h-4" />Carica Batch Milano 1</button><button onClick={exportData} className="px-4 py-2 rounded-xl border bg-white hover:bg-stone-50 text-sm inline-flex items-center gap-2"><Download className="w-4 h-4" />Backup</button><label className="px-4 py-2 rounded-xl border bg-white hover:bg-stone-50 text-sm inline-flex items-center gap-2 cursor-pointer"><Upload className="w-4 h-4" />Importa<input type="file" accept="application/json" onChange={importData} className="hidden" /></label><label className="px-4 py-2 rounded-xl border bg-teal-50 hover:bg-teal-100 text-teal-800 text-sm inline-flex items-center gap-2 cursor-pointer"><Database className="w-4 h-4" />Import NetFree dati<input type="file" accept=".csv,.json,text/csv,application/json" onChange={importNetFreeCsv} className="hidden" /></label><button onClick={loadBundledNetFreeArchive} disabled={netFreeArchiveLoading} className="px-4 py-2 rounded-xl border bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-sm inline-flex items-center gap-2 justify-center disabled:opacity-50"><Database className="w-4 h-4" />{netFreeArchiveLoading ? 'Carico NetFree...' : 'Carica archivio NetFree 2914'}</button><button onClick={clearAllData} className="px-4 py-2 rounded-xl border bg-white hover:bg-red-50 text-sm text-red-700 inline-flex items-center gap-2 justify-center"><Trash2 className="w-4 h-4" />Reset</button>{authEmail ? <button onClick={signOutFromDemo} className="col-span-2 sm:col-span-1 px-4 py-2 rounded-xl border bg-white hover:bg-stone-50 text-sm inline-flex items-center gap-2 justify-center"><LogOut className="w-4 h-4" />Esci</button> : <button onClick={goToLogin} className="col-span-2 sm:col-span-1 px-4 py-2 rounded-xl bg-gray-900 text-white hover:bg-black text-sm inline-flex items-center gap-2 justify-center"><LogIn className="w-4 h-4" />Accedi</button>}</div></header><section className="mb-8 rounded-3xl border bg-white p-5"><div className="flex flex-col xl:flex-row xl:items-end gap-4 justify-between"><div><div className="flex items-center gap-2 text-sm font-semibold text-blue-800"><ShieldCheck className="w-4 h-4" /> Profili separati per te e soci</div><p className="text-gray-600 mt-1">Profilo attivo: <strong>{activeProfile?.name || 'Profilo locale'}</strong>. Con database attivo i contatti vengono ricaricati dal cloud; in modalità locale usa Backup/Importa per non perdere dati.</p></div><div className="flex flex-col md:flex-row gap-2 md:items-center"><select value={activeProfileId} onChange={(e) => switchProfile(e.target.value)} className="rounded-2xl border px-4 py-3 bg-white min-w-48">{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select><div className="flex gap-2"><input value={newProfileName} onChange={(e) => setNewProfileName(e.target.value)} className="rounded-2xl border px-4 py-3 w-48" placeholder="Nome socio/profilo" /><button onClick={createProfile} className="rounded-2xl bg-blue-700 text-white px-4 py-3 font-semibold hover:bg-blue-800"><UserPlus className="w-4 h-4 inline mr-2" />Crea</button></div></div></div>{isAdmin && <div className="mt-5 rounded-3xl border border-blue-100 bg-blue-50 p-4"><div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4"><div><div className="text-sm font-bold text-blue-900">Permessi servizi/materiali per profilo attivo</div><p className="text-sm text-blue-900/80 mt-1">Decidi quali servizi e documenti un socio o collaboratore può aprire e condividere. L’amministratore vede sempre tutto; i profili non amministratori vedono solo i materiali autorizzati.</p></div><select value={activeProfile?.role || 'Collaboratore'} onChange={(e) => activeProfile && updateProfilePermissions(activeProfile.id, { role: e.target.value as UserRole, allowedMaterialIds: e.target.value === 'Amministratore' ? allMaterialIds : activeProfile.allowedMaterialIds })} className="rounded-2xl border px-4 py-3 bg-white min-w-48">{userRoles.map((role) => <option key={role} value={role}>{role}</option>)}</select></div><div className="mt-4 grid md:grid-cols-2 xl:grid-cols-3 gap-3">{networkMaterials.map((material) => { const checked = activeProfile?.role === 'Amministratore' || !!activeProfile?.allowedMaterialIds?.includes(material.id); return <label key={material.id} className={`rounded-2xl border p-3 bg-white flex items-start gap-3 ${checked ? 'border-blue-200' : 'border-stone-200 opacity-75'}`}><input type="checkbox" checked={checked} disabled={!activeProfile || activeProfile.role === 'Amministratore'} onChange={() => activeProfile && toggleProfileMaterial(activeProfile.id, material.id)} className="mt-1" /><span><span className="block text-sm font-bold">{material.area}</span><span className="block text-xs text-gray-600">{material.title}</span></span></label> })}</div><textarea value={activeProfile?.permissionNotes || ''} onChange={(e) => activeProfile && updateProfilePermissions(activeProfile.id, { permissionNotes: e.target.value })} className="mt-4 w-full rounded-2xl border p-3 text-sm bg-white" placeholder="Note interne sui permessi: es. può condividere solo VoiceDesk e PEF cliente; Blotix solo dopo autorizzazione admin..." /></div>}
 </section>
 
 <section className="mb-8 rounded-3xl border bg-white p-5">
