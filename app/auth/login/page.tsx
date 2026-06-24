@@ -15,21 +15,33 @@ export default function LoginPage() {
   const redirectTo = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('redirect') || '/demo' : '/demo'
   const canUseCloudLogin = useMemo(() => hasUsablePublicSupabaseConfig(), [])
 
+  function enterLocalDemo() {
+    const cleanEmail = (email || 'demo@locale.crm').trim()
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('crm_demo_auth_email', cleanEmail)
+      window.localStorage.setItem('crm_demo_login_mode', 'local')
+    }
+    toast.success('Accesso locale attivato: apro il CRM demo.')
+    router.push('/demo')
+  }
+
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
     if (!canUseCloudLogin) {
-      toast.info('Cloud non configurato: apro il CRM in modalità demo locale.')
-      router.push('/demo')
+      enterLocalDemo()
       return
     }
     setLoading(true)
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
-    if (error) {
-      toast.error(error.message || 'Accesso non riuscito. Verifica email/password o apri la modalità demo locale.')
-    } else {
-      router.push(redirectTo)
+    try {
+      const { error } = await supabase.auth.signInWithPassword({ email, password })
+      if (error) {
+        toast.error(error.message || 'Accesso non riuscito. Verifica email e password.')
+      } else {
+        router.push(redirectTo)
+      }
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
   }
 
   return (
@@ -41,9 +53,9 @@ export default function LoginPage() {
           </div>
           <span className="text-xl font-bold text-gray-900">CRM AI</span>
         </div>
-        <h1 className="text-2xl font-bold text-gray-900 mb-1">Bentornato</h1>
-        <p className="text-sm text-gray-500 mb-3">Accedi per usare il CRM operativo con salvataggio persistente dei lead.</p>
-        {!canUseCloudLogin && <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Supabase non risulta configurato in questo deploy: puoi comunque aprire il CRM in modalità demo locale, vedere NetFree e lavorare con Backup/Importa.</div>}
+        <h1 className="text-2xl font-bold text-gray-900 mb-1">Accesso CRM</h1>
+        <p className="text-sm text-gray-500 mb-3">Inserisci email e password. Se il cloud non è configurato, l’accesso funziona in modalità locale e apre subito la demo.</p>
+        {!canUseCloudLogin && <div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">Modalità locale attiva: puoi entrare senza Supabase. I dati restano nel browser; usa Backup/Importa per conservarli.</div>}
         <form onSubmit={handleLogin} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
@@ -56,9 +68,9 @@ export default function LoginPage() {
               className="w-full" placeholder="••••••••" required />
           </div>
           <button type="submit" disabled={loading} className="btn-primary w-full justify-center">
-            {loading ? 'Accesso...' : 'Accedi'}
+            {loading ? 'Accesso...' : canUseCloudLogin ? 'Accedi' : 'Entra nel CRM demo'}
           </button>
-          <button type="button" onClick={() => router.push('/demo')} className="w-full rounded-xl border bg-white px-4 py-3 text-sm font-semibold text-gray-800 hover:bg-gray-50">Apri CRM demo locale senza login</button>
+          <button type="button" onClick={enterLocalDemo} className="w-full rounded-xl border bg-white px-4 py-3 text-sm font-semibold text-gray-800 hover:bg-gray-50">Apri CRM demo locale</button>
         </form>
       </div>
     </div>
