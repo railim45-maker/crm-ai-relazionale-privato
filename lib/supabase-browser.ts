@@ -8,20 +8,27 @@ function missingSupabaseConfig() {
 function createDisabledBrowserClient() {
   return {
     auth: {
-      async signInWithPassword() {
+      async signInWithPassword(credentials?: { email?: string }) {
+        const email = credentials?.email || 'demo@locale.crm'
+        if (typeof window !== 'undefined') {
+          window.localStorage.setItem('crm_demo_auth_email', email)
+          window.localStorage.setItem('crm_demo_login_mode', 'local')
+        }
         return {
-          data: null,
-          error: {
-            message:
-              'Cloud non configurato: il CRM viene aperto in modalità demo locale.',
-          },
+          data: { user: { id: 'local-demo-user', email } },
+          error: null,
         }
       },
       async signOut() {
+        if (typeof window !== 'undefined') {
+          window.localStorage.removeItem('crm_demo_auth_email')
+          window.localStorage.removeItem('crm_demo_login_mode')
+        }
         return { error: null }
       },
       async getUser() {
-        return { data: { user: null }, error: null }
+        const email = typeof window !== 'undefined' ? window.localStorage.getItem('crm_demo_auth_email') : ''
+        return { data: { user: email ? { id: 'local-demo-user', email } : null }, error: null }
       },
     },
   } as any
