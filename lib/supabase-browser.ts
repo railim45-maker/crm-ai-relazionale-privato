@@ -1,7 +1,8 @@
 import { createBrowserClient } from '@supabase/ssr'
+import { hasUsablePublicSupabaseConfig } from './supabase-config'
 
 function missingSupabaseConfig() {
-  return !process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  return !hasUsablePublicSupabaseConfig()
 }
 
 function createDisabledBrowserClient() {
@@ -12,7 +13,7 @@ function createDisabledBrowserClient() {
           data: null,
           error: {
             message:
-              'Login cloud non configurato. Questa versione del CRM è attiva in modalità privata local-first: usa la pagina /demo.',
+              'Cloud non configurato: il CRM viene aperto in modalità demo locale.',
           },
         }
       },
