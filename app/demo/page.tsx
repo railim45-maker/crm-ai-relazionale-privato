@@ -7,7 +7,7 @@
 
 'use client'
 
-import { ChangeEvent, useEffect, useMemo, useState } from 'react'
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase-browser'
 import { Bot, Building2, CalendarDays, Calculator, CheckSquare, ChevronRight, ClipboardList, Clock, Copy, Database, Download, LogIn, LogOut, Mail, MessageSquareText, Pencil, Phone, Plus, Save, Search, Send, ShieldCheck, Star, Trash2, TrendingUp, Upload, UserPlus, Users, Zap } from 'lucide-react'
 
@@ -35,6 +35,7 @@ type SalesTone = 'Cordiale' | 'Soft' | 'Consulenziale' | 'Diretto gentile'
 type StrategicIntent = 'Aprire relazione' | 'Capire bisogno' | 'Gestire obiezione' | 'Proporre mini-demo' | 'Chiudere appuntamento'
 type ResearchEntryMode = 'Azienda' | 'Persona fisica'
 type CloudPersistenceStatus = 'verifica' | 'cloud' | 'locale' | 'errore' | 'salvataggio'
+type MeetAutomationStatus = 'verifica' | 'collegato' | 'non_collegato' | 'errore' | 'creazione'
 
 type Contact = {
   id: string
@@ -230,6 +231,9 @@ const lcrSelectionOutcomes: LcrSelectionOutcome[] = ['Da valutare', 'Approvato',
 const lcrAlignmentFlags: LcrAlignmentFlag[] = ['Da valutare', 'Allineato', 'Non allineato']
 const lcrAvailabilityWindows: LcrAvailabilityWindow[] = ['Da definire', 'Mattina', 'Pomeriggio', 'Sera', 'Personalizzata']
 const lcrPefDelegationStatuses: LcrPefDelegationStatus[] = ['Non avviata', 'Task interno creato', 'Delegabile dopo conferma', 'Completata manualmente']
+const MASSIVE_NETFREE_IMPORT_THRESHOLD = 750
+const NETFREE_IMPORT_GUARD_MS = 10 * 60 * 1000
+const NETFREE_CLOUD_SYNC_BATCH_SIZE = 200
 const claudioNetworkerName = 'Claudio Giustini'
 const claudioNetworkerPhone = '+393355394222'
 const claudioNetworkerPhoneDisplay = '+39 335 539 4222'
@@ -882,11 +886,19 @@ export default function DemoAppPage() {
   const [researchSavedFeedback, setResearchSavedFeedback] = useState('')
   const [quickPasteText, setQuickPasteText] = useState('')
   const [quickPasteFeedback, setQuickPasteFeedback] = useState('')
+  const contactsRef = useRef<Contact[]>([])
+  const netFreeImportGuardUntilRef = useRef(0)
   const [cloudStatus, setCloudStatus] = useState<CloudPersistenceStatus>('verifica')
   const [cloudMessage, setCloudMessage] = useState('Verifico se il CRM può salvare sul database persistente.')
   const [cloudReady, setCloudReady] = useState(false)
   const [authEmail, setAuthEmail] = useState('')
   const [currentRole, setCurrentRole] = useState<UserRole>('Amministratore')
+  const [meetStatus, setMeetStatus] = useState<MeetAutomationStatus>('verifica')
+  const [meetMessage, setMeetMessage] = useState('Verifico collegamento Google Calendar/Meet.')
+  const [meetAccountLabel, setMeetAccountLabel] = useState('')
+  const [meetTime, setMeetTime] = useState('10:00')
+  const [meetDuration, setMeetDuration] = useState(30)
+  const [meetNotes, setMeetNotes] = useState('')
 
   async function checkAuthUser() {
     try {
@@ -909,6 +921,50 @@ export default function DemoAppPage() {
 
   function goToLogin() {
     window.location.href = '/auth/login?redirect=/demo'
+  }
+
+  async function checkGoogleMeetStatus() {
+    setMeetStatus('verifica')
+    setMeetMessage('Verifico collegamento Google Calendar/Meet...')
+    try {
+      const response = await fetch('/api/google/status', { cache: 'no-store' })
+      const payload = await response.json().catch(() => ({}))
+      if (response.status === 401) {
+        setMeetStatus('non_collegato')
+        setMeetAccountLabel('')
+        setMeetMessage('Accedi al CRM per usare la creazione automatica degli appuntamenti Meet.')
+        return
+      }
+      if (!response.ok || !payload.connected) {
+        setMeetStatus('non_collegato')
+        setMeetAccountLabel('')
+        setMeetMessage(payload.reason || 'Google Calendar/Meet non è ancora collegato. Serve collegarlo una sola volta.')
+        return
+      }
+      setMeetStatus('collegato')
+      setMeetAccountLabel(payload.email || payload.displayName || 'Google Calendar')
+      setMeetMessage(`Google Meet collegato: ${payload.email || payload.displayName || 'account attivo'}. Conferma un appuntamento dal CRM e l’invito parte da Calendar.`)
+    } catch {
+      setMeetStatus('errore')
+      setMeetAccountLabel('')
+      setMeetMessage('Non riesco a verificare Google Calendar/Meet. Controlla configurazione e accesso.')
+    }
+  }
+
+  function connectGoogleMeet() {
+    window.location.href = '/api/google/connect'
+  }
+
+  function isNetFreeContact(contact: Contact) {
+    return Boolean((contact.netFreeStage && contact.netFreeStage !== 'Non avviato') || contact.netFreeCandidateReason || contact.netFreeLeadProfile || contact.netFreeBriefForClaudio || contact.sourceBatch?.toLowerCase().includes('netfree'))
+  }
+
+  function isMassiveNetFreeSnapshot(snapshot: Contact[]) {
+    return snapshot.length >= MASSIVE_NETFREE_IMPORT_THRESHOLD || snapshot.filter(isNetFreeContact).length >= MASSIVE_NETFREE_IMPORT_THRESHOLD
+  }
+
+  function isNetFreeImportGuardActive() {
+    return Date.now() < netFreeImportGuardUntilRef.current
   }
 
   function loadProfileData(profileId: string, useLegacyFallback = false) {
@@ -947,13 +1003,17 @@ export default function DemoAppPage() {
       if (!response.ok) throw new Error('Database non disponibile')
       const payload = await response.json()
       const cloudContacts = Array.isArray(payload.contacts) ? payload.contacts.map(normalizeContact) : []
+      const currentSnapshot = contactsRef.current
+      const protectLocalImport = isNetFreeImportGuardActive() || isMassiveNetFreeSnapshot(currentSnapshot) || (localSnapshot.length > cloudContacts.length && isMassiveNetFreeSnapshot(localSnapshot))
       setCloudStatus('cloud')
-      setCloudReady(true)
-      setCloudMessage(`Database persistente attivo: ${cloudContacts.length} contatti caricati dal cloud.`)
-      if (cloudContacts.length > 0) {
+      setCloudReady(!protectLocalImport)
+      setCloudMessage(protectLocalImport
+        ? `Database persistente raggiunto, ma non sovrascrivo l’archivio NetFree locale/massivo: cloud ${cloudContacts.length} contatti, locale ${Math.max(currentSnapshot.length, localSnapshot.length)} contatti. Esporta un Backup o sincronizza a blocchi.`
+        : `Database persistente attivo: ${cloudContacts.length} contatti caricati dal cloud.`)
+      if (cloudContacts.length > 0 && !protectLocalImport) {
         setContacts(cloudContacts)
         setSelectedContactId(cloudContacts[0]?.id || '')
-      } else if (localSnapshot.length > 0) {
+      } else if (cloudContacts.length === 0 && localSnapshot.length > 0 && !protectLocalImport) {
         await syncCloudContacts(localSnapshot, 'Ho trovato dati locali: li sto copiando nel database persistente.')
       }
     } catch {
@@ -965,39 +1025,63 @@ export default function DemoAppPage() {
 
   async function syncCloudContacts(snapshot: Contact[] = contacts, customMessage?: string) {
     if (!snapshot.length) return
+    const isMassiveSnapshot = isMassiveNetFreeSnapshot(snapshot)
+    const isManualOrImportSync = Boolean(customMessage)
+    if ((isNetFreeImportGuardActive() || isMassiveSnapshot) && !isManualOrImportSync) {
+      setCloudStatus('locale')
+      setCloudReady(false)
+      setCloudMessage('Sync automatico sospeso per archivio NetFree massivo: i contatti restano visibili nella sessione. Usa Backup oppure avvia/riavvia la sincronizzazione cloud a blocchi dopo aver configurato Supabase.')
+      return
+    }
+    const batchSize = isMassiveSnapshot ? NETFREE_CLOUD_SYNC_BATCH_SIZE : Math.max(snapshot.length, 1)
+    const totalBatches = Math.ceil(snapshot.length / batchSize)
+    const savedContacts: Contact[] = []
+    const errors: string[] = []
     setCloudStatus('salvataggio')
-    setCloudMessage(customMessage || 'Salvataggio automatico dei contatti sul database persistente...')
+    setCloudReady(false)
+    setCloudMessage(customMessage || (isMassiveSnapshot ? `Salvataggio cloud NetFree a blocchi: 0/${snapshot.length} contatti.` : 'Salvataggio automatico dei contatti sul database persistente...'))
     try {
-      const response = await fetch('/api/contacts/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contacts: snapshot }),
-      })
-      const rawPayload = await response.text()
-      let payload: any = {}
-      try { payload = rawPayload ? JSON.parse(rawPayload) : {} } catch { payload = { error: rawPayload } }
-      const apiMessage = String(payload?.message || payload?.error || '').trim()
-      const partialErrors = Array.isArray(payload?.errors) ? payload.errors.filter(Boolean).slice(0, 2).join(' · ') : ''
+      for (let index = 0; index < snapshot.length; index += batchSize) {
+        const batch = snapshot.slice(index, index + batchSize)
+        const batchNumber = Math.floor(index / batchSize) + 1
+        if (isMassiveSnapshot) setCloudMessage(`Salvataggio cloud NetFree a blocchi: blocco ${batchNumber}/${totalBatches}, ${Math.min(index + batch.length, snapshot.length)}/${snapshot.length} contatti.`)
+        const response = await fetch('/api/contacts/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contacts: batch }),
+        })
+        const rawPayload = await response.text()
+        let payload: any = {}
+        try { payload = rawPayload ? JSON.parse(rawPayload) : {} } catch { payload = { error: rawPayload } }
+        const apiMessage = String(payload?.message || payload?.error || '').trim()
+        const partialErrors = Array.isArray(payload?.errors) ? payload.errors.filter(Boolean).slice(0, 3).map(String) : []
 
-      if (response.status === 401) {
-        setCloudStatus('locale')
-        setCloudReady(false)
-        setCloudMessage(apiMessage || 'Non sei autenticato: modifiche salvate solo nel browser. Accedi per renderle persistenti.')
-        return
-      }
-      if (response.status === 503) {
-        setCloudStatus('locale')
-        setCloudReady(false)
-        setCloudMessage(apiMessage || 'Cloud non configurato: modifiche salvate nel browser. Inserisci URL, anon key e service role Supabase reali nel deploy.')
-        return
-      }
-      if (!response.ok && response.status !== 207) throw new Error(apiMessage || `Sincronizzazione fallita con stato ${response.status}`)
+        if (response.status === 401) {
+          setCloudStatus('locale')
+          setCloudReady(false)
+          setCloudMessage(apiMessage || 'Non sei autenticato: modifiche salvate solo nel browser. Accedi per renderle persistenti.')
+          return
+        }
+        if (response.status === 503) {
+          setCloudStatus('locale')
+          setCloudReady(false)
+          setCloudMessage(apiMessage || 'Cloud non configurato: modifiche salvate nel browser. Inserisci URL, anon key e service role Supabase reali nel deploy.')
+          return
+        }
+        if (!response.ok && response.status !== 207) throw new Error(apiMessage || `Sincronizzazione fallita con stato ${response.status}`)
 
-      const saved = Array.isArray(payload.saved) ? payload.saved.map(normalizeContact) : []
-      if (saved.length > 0) setContacts(saved)
-      setCloudStatus(response.status === 207 ? 'errore' : 'cloud')
-      setCloudReady(response.status !== 207)
-      setCloudMessage(response.status === 207 ? `Sincronizzazione parziale: ${partialErrors || 'alcuni contatti non sono stati salvati'}. Esegui Backup prima di chiudere.` : `Salvato sul database persistente: ${saved.length || snapshot.length} contatti.`)
+        const saved = Array.isArray(payload.saved) ? payload.saved.map(normalizeContact) : []
+        savedContacts.push(...saved)
+        if (partialErrors.length) errors.push(...partialErrors)
+      }
+
+      if (savedContacts.length > 0 && savedContacts.length >= snapshot.length) setContacts(savedContacts)
+      const partial = errors.length > 0 || savedContacts.length < snapshot.length
+      setCloudStatus(partial ? 'errore' : 'cloud')
+      setCloudReady(!partial)
+      setCloudMessage(partial
+        ? `Sincronizzazione parziale: salvati ${savedContacts.length}/${snapshot.length} contatti. Dettagli: ${errors.slice(0, 2).join(' · ') || 'alcuni contatti non sono stati confermati dal cloud'}. Esegui Backup prima di chiudere.`
+        : `Salvato sul database persistente: ${savedContacts.length || snapshot.length} contatti${isMassiveSnapshot ? ' NetFree sincronizzati a blocchi' : ''}.`)
     } catch (error: any) {
       setCloudStatus('locale')
       setCloudReady(false)
@@ -1032,8 +1116,18 @@ export default function DemoAppPage() {
     setHydrated(true)
   }, [])
 
+  useEffect(() => { contactsRef.current = contacts }, [contacts])
+
+  useEffect(() => { if (hydrated) void checkGoogleMeetStatus() }, [hydrated, authEmail])
+
   useEffect(() => {
     if (!hydrated || !activeProfileId) return
+    if (isNetFreeImportGuardActive() || isMassiveNetFreeSnapshot(contacts)) {
+      setCloudStatus('locale')
+      setCloudReady(false)
+      setCloudMessage('Archivio NetFree massivo caricato e visibile in sessione. Salvataggio locale automatico sospeso per evitare quota browser e overwrite: esporta subito un Backup oppure importa/sincronizza a blocchi.')
+      return
+    }
     try {
       window.localStorage.setItem(profileStorageKey(activeProfileId), JSON.stringify({ contacts, tasks, conversations }))
     } catch (error: any) {
@@ -1535,6 +1629,43 @@ export default function DemoAppPage() {
   function saveTask() { if (!taskTitle.trim() || !selectedContact) return; setTasks((current) => [{ id: id('task'), title: taskTitle.trim(), contactId: selectedContact.id, priority: taskPriority, due: taskDue, completed: false, createdAt: nowIso() }, ...current]); setTaskTitle(''); setTaskDue(today()); setTaskPriority('Media') }
   function moveTask(taskId: string, due: string) { setTasks((current) => current.map((task) => task.id === taskId ? { ...task, due } : task)); const task = tasks.find((item) => item.id === taskId); if (task) setContacts((current) => current.map((contact) => contact.id === task.contactId ? { ...contact, nextAction: `${calendarEventKind(task)} spostato al ${fmtDate(due)}: ${task.title}`, updatedAt: nowIso() } : contact)) }
   function createCalendarEvent(kind: 'Appuntamento' | 'Follow-up') { if (!selectedContact) return; const title = kind === 'Appuntamento' ? `Appuntamento ${selectedContact.name}: call/demo da confermare` : `Follow-up ${selectedContact.name}: prossima domanda closer`; setTasks((current) => [{ id: id('task'), title, contactId: selectedContact.id, priority: selectedContact.priorityLevel === 'A' ? 'Alta' : 'Media', due: taskDue || today(), completed: false, createdAt: nowIso() }, ...current]); setContacts((current) => current.map((contact) => contact.id === selectedContact.id ? { ...contact, outreachStage: kind === 'Appuntamento' ? 'Demo richiesta' : 'Follow-up 1', nextAction: `${kind} programmato per ${fmtDate(taskDue || today())}.`, updatedAt: nowIso() } : contact)) }
+
+  async function confirmMeetAppointment() {
+    if (!selectedContact) return
+    if (!taskDue || !meetTime) { window.alert('Imposta giorno e ora prima di confermare.'); return }
+    setMeetStatus('creazione')
+    setMeetMessage('Creo evento Google Calendar, link Meet, invito email e salvataggio CRM...')
+    try {
+      const scheduledAt = new Date(`${taskDue}T${meetTime}:00`).toISOString()
+      const response = await fetch('/api/appointments/confirm-meet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contactId: selectedContact.id,
+          contactDbId: selectedContact.dbId,
+          contact: selectedContact,
+          contactName: selectedContact.decisionMakerName || selectedContact.name,
+          attendeeEmail: selectedContact.decisionMakerEmail || selectedContact.generalEmail || selectedContact.email,
+          scheduledAt,
+          durationMinutes: meetDuration,
+          notes: meetNotes,
+          title: `Appuntamento Meet · ${selectedContact.decisionMakerName || selectedContact.name}`,
+          source: 'CRM AI Relazionale',
+        }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok && response.status !== 207) throw new Error(payload.error || payload.details || 'Creazione appuntamento non riuscita')
+      const meetingUrl = payload.meetingUrl || payload.appointment?.meeting_url || ''
+      setMeetStatus('collegato')
+      setMeetMessage(payload.message || 'Appuntamento creato: evento Calendar, link Meet e invito email generati automaticamente.')
+      setTasks((current) => [{ id: id('task'), title: `Appuntamento Meet ${selectedContact.name}`, contactId: selectedContact.id, priority: selectedContact.priorityLevel === 'A' ? 'Alta' : 'Media', due: taskDue, completed: false, createdAt: nowIso() }, ...current])
+      setContacts((current) => current.map((contact) => contact.id === selectedContact.id ? { ...contact, outreachStage: 'Demo richiesta', nextAction: `Appuntamento Meet confermato per ${fmtDate(taskDue)} alle ${meetTime}.${meetingUrl ? ` Link: ${meetingUrl}` : ''}`, updatedAt: nowIso(), lcrAppointmentAt: scheduledAt, lcrAgendaLink: payload.googleHtmlLink || contact.lcrAgendaLink, lcrZoomLink: meetingUrl || contact.lcrZoomLink } : contact))
+      setMeetNotes('')
+    } catch (error: any) {
+      setMeetStatus('errore')
+      setMeetMessage(error?.message || 'Creazione automatica non riuscita. Verifica Google, Supabase e login.')
+    }
+  }
   function updateContactStage(contactId: string, stage: OutreachStage) { setContacts((current) => current.map((c) => c.id === contactId ? { ...c, outreachStage: stage, updatedAt: nowIso(), nextAction: stage === 'Video da preparare' ? 'Preparare video personalizzato usando il gancio salvato.' : c.nextAction } : c)) }
 
   function runAnalysis() {
@@ -2356,21 +2487,26 @@ Esito da registrare: Approvato, Bocciato o Da valutare. Se approvato, la fase PE
         const skipped = importedContacts.length - fresh.length
         if (fresh.length > 0) {
           const netFreeTaskLimit = 25
-          if (fresh.length > 750) {
+          const nextContacts = [...fresh, ...contacts].map(normalizeContact)
+          if (fresh.length > MASSIVE_NETFREE_IMPORT_THRESHOLD) {
+            netFreeImportGuardUntilRef.current = Date.now() + NETFREE_IMPORT_GUARD_MS
             setCloudReady(false)
-            setCloudStatus('locale')
-            setCloudMessage('Import NetFree massivo completato in sessione locale sicura. Per evitare blocchi del browser non avvio il salvataggio automatico cloud dell’intero archivio: esporta un Backup dopo il controllo o usa import a blocchi.')
+            setCloudStatus('salvataggio')
+            setCloudMessage('Import NetFree massivo completato: preparo la sincronizzazione Supabase a blocchi. Se il database non è ancora configurato, i lead restano visibili in sessione e puoi esportare un Backup.')
           }
-          setContacts((current) => [...fresh, ...current].map(normalizeContact))
+          setContacts(nextContacts)
           setSelectedContactId(fresh[0].id)
           setTasks((current) => [
             ...fresh.slice(0, netFreeTaskLimit).map((contact) => ({ id: id('task'), title: `Qualificare lead NetFree ${contact.name}: completare dati base e strategia di contatto`, contactId: contact.id, priority: contact.priorityLevel === 'A' ? 'Alta' as Priority : 'Media' as Priority, due: addDays(2), completed: false, createdAt: timestamp })),
             ...current,
           ])
+          if (fresh.length > MASSIVE_NETFREE_IMPORT_THRESHOLD) {
+            void syncCloudContacts(nextContacts, `Import NetFree completato: avvio salvataggio Supabase a blocchi per ${nextContacts.length} contatti.`)
+          }
         }
         setSection('netfree')
         setAnswer(fresh.length > 0
-          ? `Import NetFree completato: ${fresh.length} nuovi lead aggiunti, ${skipped} duplicati saltati. Totale candidati NetFree dopo l’import: ${netFreeContacts.length + fresh.length}. Trovi la lista nella sezione NetFree, sotto “Lista contatti importati”. Ho selezionato il primo lead importato. Se il browser avvisa che il salvataggio locale è troppo grande, esporta subito un Backup o usa il database cloud.`
+          ? `Import NetFree completato: ${fresh.length} nuovi lead aggiunti, ${skipped} duplicati saltati. Totale candidati NetFree dopo l’import: ${netFreeContacts.length + fresh.length}. Trovi la lista nella sezione NetFree, sotto “Lista contatti importati”. Ho selezionato il primo lead importato. Se Supabase è configurato, il CRM avvia il salvataggio cloud a blocchi; in caso contrario esporta subito un Backup.`
           : `Import NetFree letto correttamente, ma non ho aggiunto nuovi lead: le ${importedContacts.length} righe risultano già presenti in questo profilo. Se vuoi ricaricare da zero, usa Reset oppure importa in un profilo nuovo.`)
       } catch (error: any) {
         window.alert(`File NetFree non valido o non leggibile. Usa CSV o JSON curato. Dettaglio: ${error?.message || 'formato non riconosciuto'}`)
@@ -2387,7 +2523,7 @@ Esito da registrare: Approvato, Bocciato o Da valutare. Se approvato, la fase PE
     stage,
     items: contacts.filter((contact) => (contact.outreachStage || 'Da qualificare') === stage),
   }))
-  const netFreeContacts = contacts.filter((contact) => (contact.netFreeStage && contact.netFreeStage !== 'Non avviato') || contact.netFreeCandidateReason || contact.netFreeLeadProfile || contact.netFreeBriefForClaudio)
+  const netFreeContacts = contacts.filter(isNetFreeContact)
   const netFreeStageGroups = netFreeStages.map((stage) => ({
     stage,
     items: netFreeContacts.filter((contact) => (contact.netFreeStage || 'Non avviato') === stage),
@@ -2446,6 +2582,9 @@ Esito da registrare: Approvato, Bocciato o Da valutare. Se approvato, la fase PE
     </div>
   </div>
 </section>
+
+
+  {section === 'calendar' && <section className="mb-8 rounded-3xl border border-blue-100 bg-blue-50 p-5"><div className="flex flex-col xl:flex-row xl:items-start gap-5 justify-between"><div className="flex-1"><div className="flex items-center gap-2 text-sm font-semibold text-blue-900"><CalendarDays className="w-4 h-4" /> Automazione appuntamenti Google Meet</div><h2 className="text-xl font-bold mt-1">Conferma una volta: Calendar crea link Meet, invito e CRM</h2><p className="text-sm text-blue-950/80 mt-2">Seleziona il lead, giorno e ora; poi premi conferma. Il sistema crea l’evento Google Calendar con link Meet, invia l’invito al partecipante se ha email e salva l’appuntamento su Supabase. Vale per contatti ordinari e NetFree.</p><div className={`mt-4 rounded-2xl border px-4 py-3 text-sm font-semibold ${meetStatus === 'collegato' ? 'bg-green-50 border-green-200 text-green-800' : meetStatus === 'creazione' || meetStatus === 'verifica' ? 'bg-white border-blue-200 text-blue-900' : meetStatus === 'errore' ? 'bg-red-50 border-red-200 text-red-800' : 'bg-amber-50 border-amber-200 text-amber-900'}`}>{meetMessage}</div></div><div className="xl:w-[520px] rounded-3xl border bg-white p-4 space-y-3"><div className="grid md:grid-cols-2 gap-3"><label className="text-sm font-semibold">Lead<select value={selectedContact?.id || ''} onChange={(e) => setSelectedContactId(e.target.value)} className="mt-1 w-full rounded-2xl border px-3 py-3 bg-white">{contacts.slice(0, 300).map((contact) => <option key={contact.id} value={contact.id}>{contact.name}</option>)}</select></label><label className="text-sm font-semibold">Giorno<input type="date" value={taskDue} onChange={(e) => setTaskDue(e.target.value)} className="mt-1 w-full rounded-2xl border px-3 py-3" /></label><label className="text-sm font-semibold">Ora<input type="time" value={meetTime} onChange={(e) => setMeetTime(e.target.value)} className="mt-1 w-full rounded-2xl border px-3 py-3" /></label><label className="text-sm font-semibold">Durata<select value={meetDuration} onChange={(e) => setMeetDuration(Number(e.target.value))} className="mt-1 w-full rounded-2xl border px-3 py-3 bg-white"><option value={30}>30 minuti</option><option value={45}>45 minuti</option><option value={60}>60 minuti</option><option value={90}>90 minuti</option></select></label></div><textarea value={meetNotes} onChange={(e) => setMeetNotes(e.target.value)} className="w-full rounded-2xl border p-3 text-sm" placeholder="Note interne per briefing appuntamento, non obbligatorie..." /><div className="flex flex-col sm:flex-row gap-2"><button onClick={confirmMeetAppointment} disabled={!selectedContact || meetStatus === 'creazione'} className="flex-1 rounded-2xl bg-blue-700 text-white px-4 py-3 font-semibold hover:bg-blue-800 disabled:opacity-40"><Send className="w-4 h-4 inline mr-2" />Conferma appuntamento Meet</button><button onClick={connectGoogleMeet} className="rounded-2xl border bg-white px-4 py-3 font-semibold hover:bg-stone-50"><CalendarDays className="w-4 h-4 inline mr-2" />{meetStatus === 'collegato' ? 'Ricollega Google' : 'Collega Google'}</button></div><div className="text-xs text-gray-600"><strong>Account:</strong> {meetAccountLabel || 'non collegato'} · <strong>Email lead:</strong> {(selectedContact?.decisionMakerEmail || selectedContact?.generalEmail || selectedContact?.email || 'mancante')}</div></div></div></section>}
 
   {section === 'dashboard' && <div className="space-y-6"><div className="rounded-3xl border bg-white p-5 flex flex-col lg:flex-row gap-4 lg:items-center"><div className="w-12 h-12 rounded-2xl bg-green-50 text-green-700 flex items-center justify-center"><Bot className="w-5 h-5" /></div><div className="flex-1"><div className="font-semibold">Agente operativo · Prossima mossa</div><div className="text-gray-600">{suggestion}</div></div><button onClick={() => setSection('agent')} className="px-5 py-3 rounded-2xl border bg-stone-50 hover:bg-stone-100">Interroga agente</button></div><div className="grid grid-cols-2 lg:grid-cols-7 gap-4"><div className="rounded-3xl bg-white border p-5"><Users className="w-5 h-5 text-blue-600 mb-3" /><div className="text-sm text-gray-500">Database</div><div className="text-3xl font-bold">{metrics.active}/100</div></div><div className="rounded-3xl bg-white border p-5"><Star className="w-5 h-5 text-red-600 mb-3" /><div className="text-sm text-gray-500">A-list</div><div className="text-3xl font-bold">{metrics.aList}</div></div><div className="rounded-3xl bg-white border p-5"><ClipboardList className="w-5 h-5 text-green-600 mb-3" /><div className="text-sm text-gray-500">Qualificati</div><div className="text-3xl font-bold">{metrics.qualified}</div></div><button onClick={() => setSection('research')} className="rounded-3xl bg-white border p-5 text-left hover:bg-stone-50"><Search className="w-5 h-5 text-cyan-600 mb-3" /><div className="text-sm text-gray-500">Ricerca guidata</div><div className="text-3xl font-bold">{contacts.filter((c) => c.researchSummary || c.publicSources).length}</div><div className="text-xs text-gray-500 mt-1">lead contestualizzati</div></button><div className="rounded-3xl bg-white border p-5"><CheckSquare className="w-5 h-5 text-orange-600 mb-3" /><div className="text-sm text-gray-500">Task aperti</div><div className="text-3xl font-bold">{metrics.tasks}</div></div><div className="rounded-3xl bg-white border p-5"><TrendingUp className="w-5 h-5 text-purple-600 mb-3" /><div className="text-sm text-gray-500">Pipeline stimata</div><div className="text-3xl font-bold">{euro(metrics.pipeline)}</div></div><button onClick={() => setSection('study')} className="rounded-3xl bg-white border p-5 text-left hover:bg-stone-50"><Calculator className="w-5 h-5 text-teal-600 mb-3" /><div className="text-sm text-gray-500">Studio su misura</div><div className="text-3xl font-bold">2,5%</div><div className="text-xs text-gray-500 mt-1">tokenizzazione + plafond</div></button></div>{isAdmin && <div className="rounded-3xl border border-indigo-100 bg-indigo-50 p-5"><div className="flex items-center gap-3 mb-4"><ShieldCheck className="w-5 h-5 text-indigo-700" /><div><h2 className="font-bold text-lg">KPI amministratore · soci, collaboratori e investitori</h2><p className="text-sm text-indigo-900/80">Questi indicatori sono pensati per la vista amministratore: soci e collaboratori lavorano sui propri contatti senza vedere il quadro complessivo.</p></div></div><div className="grid md:grid-cols-5 gap-3"><div className="rounded-2xl bg-white border p-4"><div className="text-xs text-gray-500">Collaboratori rete</div><div className="text-2xl font-bold">{metrics.collaborators}</div></div><div className="rounded-2xl bg-white border p-4"><div className="text-xs text-gray-500">Attivi / leader</div><div className="text-2xl font-bold">{metrics.activeCollaborators}</div></div><div className="rounded-2xl bg-white border p-4"><div className="text-xs text-gray-500">Investitori</div><div className="text-2xl font-bold">{metrics.investors}</div></div><div className="rounded-2xl bg-white border p-4"><div className="text-xs text-gray-500">Pipeline investitori</div><div className="text-2xl font-bold">{euro(metrics.investorPipeline)}</div></div><div className="rounded-2xl bg-white border p-4"><div className="text-xs text-gray-500">Documenti da seguire</div><div className="text-2xl font-bold">{metrics.documentsPending}</div></div></div></div>}<div className="grid lg:grid-cols-2 gap-6"><div className="rounded-3xl bg-white border p-5"><h2 className="font-bold text-lg mb-4">Follow-up aperti</h2><div className="space-y-3">{openTasks.slice(0, 6).map((task) => { const c = contacts.find((x) => x.id === task.contactId); return <div key={task.id} className="rounded-2xl border p-4 flex items-center gap-3"><input type="checkbox" checked={task.completed} onChange={() => setTasks((current) => current.map((x) => x.id === task.id ? { ...x, completed: !x.completed } : x))} /><div className="flex-1"><div className="font-semibold">{task.title}</div><div className="text-sm text-gray-500">{c?.name || 'Contatto eliminato'} · {fmtDate(task.due)}</div></div><span className={`text-xs border rounded-lg px-2 py-1 ${priorityClass(task.priority)}`}>{task.priority}</span><button onClick={() => setTasks((current) => current.filter((x) => x.id !== task.id))} className="text-red-600"><Trash2 className="w-4 h-4" /></button></div> })}{openTasks.length === 0 && <p className="text-gray-500">Nessun task aperto. Carica il batch o crea un follow-up da un contatto.</p>}</div></div><div className="rounded-3xl bg-white border p-5"><h2 className="font-bold text-lg mb-4">Aggiungi task rapido</h2><div className="space-y-3"><select value={selectedContact?.id || ''} onChange={(e) => setSelectedContactId(e.target.value)} className="w-full rounded-2xl border px-4 py-3 bg-white"><option value="">Seleziona contatto</option>{contacts.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select><input value={taskTitle} onChange={(e) => setTaskTitle(e.target.value)} className="w-full rounded-2xl border px-4 py-3" placeholder="Es. completare email, inviare video, follow-up..." /><div className="grid grid-cols-2 gap-3"><input type="date" value={taskDue} onChange={(e) => setTaskDue(e.target.value)} className="rounded-2xl border px-4 py-3" /><select value={taskPriority} onChange={(e) => setTaskPriority(e.target.value as Priority)} className="rounded-2xl border px-4 py-3 bg-white"><option>Alta</option><option>Media</option><option>Bassa</option></select></div><button onClick={saveTask} disabled={!selectedContact || !taskTitle.trim()} className="w-full rounded-2xl bg-gray-900 text-white py-3 font-semibold hover:bg-gray-800 disabled:opacity-40"><Plus className="w-4 h-4 inline mr-2" />Salva task</button></div></div></div></div>}
 
