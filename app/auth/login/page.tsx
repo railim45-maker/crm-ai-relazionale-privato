@@ -1,6 +1,7 @@
 'use client'
 import { useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase-browser'
+import { hasUsablePublicSupabaseConfig } from '@/lib/supabase-config'
 import { useRouter } from 'next/navigation'
 import { Brain } from 'lucide-react'
 import { toast } from 'sonner'
@@ -12,14 +13,19 @@ export default function LoginPage() {
   const router = useRouter()
   const supabase = createClient()
   const redirectTo = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('redirect') || '/demo' : '/demo'
-  const canUseCloudLogin = useMemo(() => Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY), [])
+  const canUseCloudLogin = useMemo(() => hasUsablePublicSupabaseConfig(), [])
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
+    if (!canUseCloudLogin) {
+      toast.info('Cloud non configurato: apro il CRM in modalità demo locale.')
+      router.push('/demo')
+      return
+    }
     setLoading(true)
     const { error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) {
-      toast.error(error.message || 'Accesso non riuscito. Se Supabase non è configurato, apri la modalità demo locale.')
+      toast.error(error.message || 'Accesso non riuscito. Verifica email/password o apri la modalità demo locale.')
     } else {
       router.push(redirectTo)
     }
