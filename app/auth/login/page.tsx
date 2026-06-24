@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase-browser'
 import { useRouter } from 'next/navigation'
 import { Brain } from 'lucide-react'
@@ -12,13 +12,14 @@ export default function LoginPage() {
   const router = useRouter()
   const supabase = createClient()
   const redirectTo = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('redirect') || '/demo' : '/demo'
+  const canUseCloudLogin = useMemo(() => Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY), [])
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
     setLoading(true)
     const { error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) {
-      toast.error(error.message)
+      toast.error(error.message || 'Accesso non riuscito. Se Supabase non è configurato, apri la modalità demo locale.')
     } else {
       router.push(redirectTo)
     }
@@ -35,7 +36,8 @@ export default function LoginPage() {
           <span className="text-xl font-bold text-gray-900">CRM AI</span>
         </div>
         <h1 className="text-2xl font-bold text-gray-900 mb-1">Bentornato</h1>
-        <p className="text-sm text-gray-500 mb-6">Accedi per usare il CRM operativo con salvataggio persistente dei lead.</p>
+        <p className="text-sm text-gray-500 mb-3">Accedi per usare il CRM operativo con salvataggio persistente dei lead.</p>
+        {!canUseCloudLogin && <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Supabase non risulta configurato in questo deploy: puoi comunque aprire il CRM in modalità demo locale, vedere NetFree e lavorare con Backup/Importa.</div>}
         <form onSubmit={handleLogin} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
@@ -50,6 +52,7 @@ export default function LoginPage() {
           <button type="submit" disabled={loading} className="btn-primary w-full justify-center">
             {loading ? 'Accesso...' : 'Accedi'}
           </button>
+          <button type="button" onClick={() => router.push('/demo')} className="w-full rounded-xl border bg-white px-4 py-3 text-sm font-semibold text-gray-800 hover:bg-gray-50">Apri CRM demo locale senza login</button>
         </form>
       </div>
     </div>
