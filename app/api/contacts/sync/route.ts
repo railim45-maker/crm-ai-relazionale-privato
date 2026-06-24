@@ -3,6 +3,8 @@ import { createServerClient, createAdminClient } from '@/lib/supabase'
 import { dbContactToDemo, demoContactToDb } from '@/lib/demo-crm-mapping'
 import { hasUsableAdminSupabaseConfig } from '@/lib/supabase-config'
 
+const MAX_SYNC_BATCH_SIZE = 250
+
 function hasUuidShape(value: unknown) {
   return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i.test(value)
 }
@@ -29,13 +31,14 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json().catch(() => null)
     const contacts = Array.isArray(body?.contacts) ? body.contacts : []
-    if (!contacts.length) return NextResponse.json({ saved: [], count: 0, persistence: 'cloud' })
+    if (!contacts.length) return NextResponse.json({ saved: [], count: 0, received: 0, persistence: 'cloud' })
 
+    const batch = contacts.slice(0, MAX_SYNC_BATCH_SIZE)
     const admin = createAdminClient()
     const saved: any[] = []
     const errors: string[] = []
 
-    for (const contact of contacts.slice(0, 250)) {
+    for (const contact of batch) {
       const payload = demoContactToDb(contact)
       let existing: any = null
 
@@ -82,8 +85,18 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    if (errors.length) return NextResponse.json({ saved, errors, code: 'partial_sync_failed' }, { status: 207 })
-    return NextResponse.json({ saved, count: saved.length, persistence: 'cloud' })
+    const result = {
+      saved,
+      count: saved.length,
+      received: contacts.length,
+      processed: batch.length,
+      truncated: contacts.length > batch.length,
+      maxBatchSize: MAX_SYNC_BATCH_SIZE,
+      persistence: 'cloud',
+    }
+
+    if (errors.length) return NextResponse.json({ ...result, errors, code: 'partial_sync_failed' }, { status: 207 })
+    return NextResponse.json(result)
   } catch (error: any) {
     return NextResponse.json({
       saved: [],
