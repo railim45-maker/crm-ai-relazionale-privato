@@ -905,7 +905,8 @@ export default function DemoAppPage() {
     try {
       const supabase = createClient()
       const { data } = await supabase.auth.getUser()
-      setAuthEmail(data.user?.email || '')
+      const localEmail = typeof window !== 'undefined' ? window.localStorage.getItem('crm_demo_auth_email') : ''
+      setAuthEmail(data.user?.email || localEmail || '')
     } catch {
       setAuthEmail('')
     }
@@ -916,7 +917,12 @@ export default function DemoAppPage() {
       const supabase = createClient()
       await supabase.auth.signOut()
     } finally {
-      window.location.href = '/auth/login?redirect=/demo'
+      if (typeof window !== 'undefined') {
+        window.localStorage.removeItem('crm_demo_auth_email')
+        window.localStorage.removeItem('crm_demo_login_mode')
+      }
+      setAuthEmail('')
+      setAnswer('Sei uscito dalla sessione locale. Puoi continuare a usare la demo oppure rientrare dal pulsante Accedi.')
     }
   }
 
