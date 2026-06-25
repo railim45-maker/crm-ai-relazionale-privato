@@ -1,0 +1,34 @@
+Pacchetto: crm_patch_finale_deploy_voicedesk_lcr_paralleli.zip
+Data: 2026-06-25
+Scopo: allineare il repository GitHub collegato a Vercel alla versione locale corretta del CRM AI Relazionale, distinguendo due lavorazioni parallele e non sostitutive.
+
+Principio corretto:
+- VoiceDesk 100: prima lavorazione aziendale su 100 lead, rivolta ad aziende che possono facilitare e ottimizzare la gestione chiamate con AI.
+- LCR/NetFree 2914: lavorazione parallela e indipendente, rivolta a persone che possono aderire a prescindere da VoiceDesk e avviare un percorso iniziale legato al reddito passivo dai propri asset.
+
+File inclusi:
+- app/demo/page.tsx
+  Demo aggiornata con titolo "CRM privato · VoiceDesk 100 + LCR/NetFree 2914", sezione "VoiceDesk 100", archivio LCR/NetFree 2914, LCR 6x6, flussi manuali agenda/Zoom/PEF e messaggio di import che chiarisce che i 100 lead VoiceDesk non vengono sostituiti.
+- app/auth/login/page.tsx
+  Login aggiornato con fallback locale e redirect a /demo quando Supabase non è configurato.
+- app/dashboard/layout.tsx
+  Layout dashboard aggiornato per non bloccare l’accesso quando Supabase non è configurato.
+- lib/supabase-browser.ts
+  Client Supabase browser con fallback locale, senza errore bloccante "login cloud non configurato".
+- lib/supabase-config.ts
+  Rilevamento placeholder Supabase per distinguere cloud reale e fallback locale.
+- lib/supabase.ts
+  Supporto Supabase lato server/cloud.
+- public/data/netfree-unified-contacts.json
+  Archivio LCR/NetFree con 2914 lead.
+- docs/DIAGNOSI_SUPABASE_NON_COLLEGATO.md
+  Diagnosi dettagliata delle variabili Supabase mancanti/placeholder.
+- ISTRUZIONI_DEPLOY_GITHUB_VERCEL.md
+  Istruzioni rapide per applicare la patch, fare commit/push e triggerare Vercel.
+- REPORT_ALLINEAMENTO_DEPLOY_CRM.md
+  Report completo con prove della differenza tra locale e deploy pubblico e distinzione tra i due flussi.
+- MANIFEST_FILE_INCLUSI.txt
+  Questo manifest.
+
+Nota operativa:
+La cartella locale /home/ubuntu/crm-ai-relazionale-work non è il repository GitHub collegato a Vercel. Lo ZIP va applicato nel repository GitHub reale del progetto e poi pushato sul branch di produzione.
