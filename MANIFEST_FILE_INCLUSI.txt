@@ -1,0 +1,10 @@
+/home/ubuntu/consegne_crm/crm_patch_completo_ultimi_giorni/ISTRUZIONI_INSTALLAZIONE.md
+/home/ubuntu/consegne_crm/crm_patch_completo_ultimi_giorni/MANIFEST_FILE_INCLUSI.txt
+/home/ubuntu/consegne_crm/crm_patch_completo_ultimi_giorni/app/auth/login/page.tsx
+/home/ubuntu/consegne_crm/crm_patch_completo_ultimi_giorni/app/dashboard/layout.tsx
+/home/ubuntu/consegne_crm/crm_patch_completo_ultimi_giorni/app/demo/page.tsx
+/home/ubuntu/consegne_crm/crm_patch_completo_ultimi_giorni/docs/DIAGNOSI_SUPABASE_NON_COLLEGATO.md
+/home/ubuntu/consegne_crm/crm_patch_completo_ultimi_giorni/lib/supabase-browser.ts
+/home/ubuntu/consegne_crm/crm_patch_completo_ultimi_giorni/lib/supabase-config.ts
+/home/ubuntu/consegne_crm/crm_patch_completo_ultimi_giorni/lib/supabase.ts
+/home/ubuntu/consegne_crm/crm_patch_completo_ultimi_giorni/public/data/netfree-unified-contacts.json
