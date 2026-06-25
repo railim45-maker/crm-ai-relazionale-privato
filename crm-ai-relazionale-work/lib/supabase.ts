@@ -2,9 +2,10 @@ import { createBrowserClient } from '@supabase/ssr'
 import { createServerClient as _createServerClient } from '@supabase/ssr'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { cookies } from 'next/headers'
+import { hasUsableAdminSupabaseConfig, hasUsablePublicSupabaseConfig } from './supabase-config'
 
 function missingPublicSupabaseConfig() {
-  return !process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  return !hasUsablePublicSupabaseConfig()
 }
 
 function createDisabledClient(): SupabaseClient<any, any, any> {
@@ -67,7 +68,7 @@ export async function createServerClient(): Promise<SupabaseClient<any, any, any
 }
 
 export function createAdminClient(): SupabaseClient<any, any, any> {
-  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  if (!hasUsableAdminSupabaseConfig()) {
     return createDisabledClient()
   }
 
