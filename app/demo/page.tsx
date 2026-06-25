@@ -165,6 +165,9 @@ type Contact = {
   lcrMatrixLevel?: number
   lcrMatrixSlot?: number
   lcrDirectPeopleCount?: number
+  netFreeMergedRecordCount?: number
+  netFreeMergedDuplicateIds?: string
+  netFreeMergedSources?: string
 }
 
 
@@ -1599,37 +1602,73 @@ export default function DemoAppPage() {
 
 
 
-  function importMilanoBatch1() {
-    const timestamp = nowIso()
-    const existing = new Set(contacts.map((c) => c.name.toLowerCase().trim()))
-    const toAdd = milanoBatch1.filter((lead) => !existing.has(lead.name.toLowerCase().trim())).map((lead) => ({
-      ...lead,
+  function voiceDeskContactFromLead(lead: Partial<SeedLead> & Record<string, any>, index: number, timestamp: string): Contact {
+    const priority = (lead.priorityLevel || 'B') as PriorityLevel
+    return normalizeContact({
       id: id('contact'),
-      name: lead.name,
-      company: lead.name,
-      role: lead.category || '',
-      email: '',
-      phone: lead.phone || '',
-      status: 'Lead' as ContactStatus,
-      interest: lead.priorityLevel === 'A' ? 8 : 7,
+      name: String(lead.name || `Struttura VoiceDesk ${index + 1}`),
+      company: String(lead.name || lead.company || `Struttura VoiceDesk ${index + 1}`),
+      role: String(lead.category || 'Struttura ricettiva'),
+      email: String(lead.email || ''),
+      phone: String(lead.phone || ''),
+      status: 'Lead',
+      interest: priority === 'A' ? 8 : 7,
       trust: 5,
-      value: lead.priorityLevel === 'A' ? 6000 : 3500,
+      value: priority === 'A' ? 6000 : 3500,
       lastContact: '',
-      topics: ['Hospitality premium', lead.category || '', lead.subcategory || ''].filter(Boolean),
-      nextAction: 'Completare sito, email, decision maker e preparare messaggio/video personalizzato.',
-      notes: 'Lead importato dal Batch Milano 1. Verificare e completare i campi mancanti prima dell’invio.',
+      topics: ['VoiceDesk', 'Strutture ricettive', String(lead.city || 'Zona lavorata')].filter(Boolean),
+      nextAction: 'Contattare struttura ricettiva: verificare referente, volume chiamate, richieste ospiti e possibile demo VoiceDesk.',
+      notes: joinUniqueContactValues(String(lead.notes || ''), String(lead.osmUrl || '') ? `Fonte mappa: ${lead.osmUrl}` : ''),
       createdAt: timestamp,
       updatedAt: timestamp,
-      city: 'Milano',
-      outreachStage: 'Da qualificare' as OutreachStage,
-      sourceBatch: 'Milano Batch 1',
-    }))
-    if (toAdd.length === 0) { window.alert('Il Batch Milano 1 risulta già caricato in questo profilo.'); return }
-    setContacts((current) => [...toAdd, ...current])
+      category: String(lead.category || 'Struttura ricettiva'),
+      subcategory: String(lead.subcategory || 'Hotel/camping/B&B da contattare'),
+      city: String(lead.city || ''),
+      address: String(lead.address || ''),
+      website: String(lead.website || ''),
+      generalEmail: String(lead.email || ''),
+      services: String(lead.services || 'Struttura ricettiva; reception; richieste ospiti; chiamate e prenotazioni'),
+      priorityLevel: priority,
+      messageAngle: String(lead.messageAngle || 'Ottimizzare gestione chiamate, richieste ospiti e contatti fuori orario con VoiceDesk AI.'),
+      personalizationHook: String(lead.personalizationHook || 'Lead VoiceDesk da qualificare nella zona lavorata.'),
+      outreachStage: 'Da qualificare',
+      sourceBatch: String(lead.sourceBatch || 'VoiceDesk 100 strutture ricettive'),
+      voiceDeskSegment: 'Hotel',
+      rating: String(lead.rating || ''),
+      reviews: String(lead.reviews || ''),
+    } as Contact)
+  }
+
+  async function importMilanoBatch1() {
+    const timestamp = nowIso()
+    let sourceLabel = 'archivio VoiceDesk 100 strutture ricettive'
+    let leads: Array<Partial<SeedLead> & Record<string, any>> = []
+    try {
+      const response = await fetch('/data/voicedesk-hotels-top100.json', { cache: 'no-store' })
+      if (!response.ok) throw new Error(`archivio VoiceDesk non trovato (${response.status})`)
+      const parsed = await response.json()
+      leads = Array.isArray(parsed) ? parsed : Array.isArray(parsed.contacts) ? parsed.contacts : []
+    } catch {
+      leads = milanoBatch1
+      sourceLabel = 'seed minimo incorporato'
+    }
+    const existing = new Set(contacts.map((c) => `${(c.name || '').toLowerCase().trim()}|${normalizeNetFreePhone(c.phone)}`))
+    const toAdd = leads.map((lead, index) => voiceDeskContactFromLead(lead, index, timestamp)).filter((lead) => {
+      const key = `${(lead.name || '').toLowerCase().trim()}|${normalizeNetFreePhone(lead.phone)}`
+      if (existing.has(key)) return false
+      existing.add(key)
+      return true
+    })
+    if (toAdd.length === 0) {
+      setSection('contacts')
+      setAnswer(`Elenco VoiceDesk già caricato: non ho aggiunto duplicati. Usa la sezione Contatti e filtra/cerca VoiceDesk, Hotel, Campeggio o la zona lavorata.`)
+      return
+    }
+    setContacts((current) => [...toAdd, ...current].map(normalizeContact))
     setSelectedContactId(toAdd[0]?.id || selectedContactId)
-    setTasks((current) => [...toAdd.map((c) => ({ id: id('task'), title: `Qualificare ${c.name}: sito, email e decision maker`, contactId: c.id, priority: c.priorityLevel === 'A' ? 'Alta' as Priority : 'Media' as Priority, due: today(), completed: false, createdAt: timestamp })), ...current])
+    setTasks((current) => [...toAdd.slice(0, 50).map((c) => ({ id: id('task'), title: `Contattare ${c.name}: verificare referente e bisogno VoiceDesk`, contactId: c.id, priority: c.priorityLevel === 'A' ? 'Alta' as Priority : 'Media' as Priority, due: today(), completed: false, createdAt: timestamp })), ...current])
     setSection('contacts')
-    setAnswer(`Ho caricato ${toAdd.length} lead del Batch Milano 1 nel profilo ${activeProfile?.name || 'attivo'}. Ora completa i campi mancanti e porta gli A-list a “Video da preparare”.`)
+    setAnswer(`Ho caricato ${toAdd.length} strutture da contattare per VoiceDesk da ${sourceLabel}. L’elenco è ora visibile in Contatti con priorità, telefono, email/sito e prossima azione. LCR/NetFree resta un flusso separato.`)
   }
 
   function deleteContact(contactId: string) { setContacts((c) => c.filter((x) => x.id !== contactId)); setTasks((t) => t.filter((x) => x.contactId !== contactId)); setConversations((x) => x.filter((r) => r.contactId !== contactId)); if (selectedContactId === contactId) setSelectedContactId(''); if (editingId === contactId) resetDraft() }
@@ -2366,9 +2405,88 @@ Esito da registrare: Approvato, Bocciato o Da valutare. Se approvato, la fase PE
     return key.trim().replace(/^\uFEFF/, '').toLowerCase().replace(/[^a-z0-9]/g, '')
   }
 
+  function cleanNetFreeName(value?: string) {
+    return String(value || '').trim().replace(/^First Name\s+/i, '').replace(/\s+Last Name\s+/i, ' ').replace(/\s+Contact Information\s+\+?[\d\s().-]+$/i, '').replace(/\s+/g, ' ').trim()
+  }
+
+  function normalizeNetFreePhone(value?: string) {
+    let digits = String(value || '').replace(/\D+/g, '')
+    if (digits.startsWith('39') && digits.length > 10) digits = digits.slice(2)
+    return digits.length >= 8 ? digits.slice(-10) : ''
+  }
+
+  function normalizeNetFreeText(value?: string) {
+    return String(value || '').toLowerCase().trim().replace(/^https?:\/\/(www\.)?/i, '').replace(/\/$/, '')
+  }
+
   function netFreeDedupeKey(contact: Partial<Contact>) {
-    const identity = (contact.phone || contact.email || contact.socialInstagramUrl || contact.socialFacebookUrl || contact.name || '').toLowerCase().trim()
-    return `${(contact.name || '').toLowerCase().trim()}|${identity}`
+    const phoneKey = normalizeNetFreePhone(contact.netFreePreferredPhone || contact.phone)
+    if (phoneKey) return `phone:${phoneKey}`
+    const emailKey = normalizeNetFreeText(contact.email || contact.generalEmail || contact.decisionMakerEmail)
+    if (emailKey) return `email:${emailKey}`
+    const instagramKey = normalizeNetFreeText(contact.socialInstagramUrl)
+    if (instagramKey) return `instagram:${instagramKey}`
+    const facebookKey = normalizeNetFreeText(contact.socialFacebookUrl)
+    if (facebookKey) return `facebook:${facebookKey}`
+    return `name:${normalizeNetFreeText(cleanNetFreeName(contact.name))}`
+  }
+
+  function joinUniqueContactValues(...values: Array<string | undefined>) {
+    const seen = new Set<string>()
+    const out: string[] = []
+    values.flatMap((value) => String(value || '').split(/\s*[;|]\s*|\n+/)).map((value) => value.trim()).filter(Boolean).forEach((value) => {
+      const key = value.toLowerCase()
+      if (!seen.has(key)) { seen.add(key); out.push(value) }
+    })
+    return out.join(' | ')
+  }
+
+  function mergeNetFreeContacts(primary: Contact, duplicate: Contact): Contact {
+    const count = Math.max(1, Number(primary.netFreeMergedRecordCount || 1)) + Math.max(1, Number(duplicate.netFreeMergedRecordCount || 1))
+    return normalizeContact({
+      ...primary,
+      name: cleanNetFreeName(primary.name) || cleanNetFreeName(duplicate.name) || primary.name,
+      company: primary.company || duplicate.company,
+      email: joinUniqueContactValues(primary.email, duplicate.email),
+      phone: joinUniqueContactValues(primary.phone, duplicate.phone),
+      generalEmail: joinUniqueContactValues(primary.generalEmail, duplicate.generalEmail),
+      decisionMakerEmail: joinUniqueContactValues(primary.decisionMakerEmail, duplicate.decisionMakerEmail),
+      socialInstagramUrl: joinUniqueContactValues(primary.socialInstagramUrl, duplicate.socialInstagramUrl),
+      socialFacebookUrl: joinUniqueContactValues(primary.socialFacebookUrl, duplicate.socialFacebookUrl),
+      website: joinUniqueContactValues(primary.website, duplicate.website),
+      notes: joinUniqueContactValues(primary.notes, duplicate.notes, `Scheda unificata NetFree: ${count} righe originarie appartenevano alla stessa persona/telefono.`),
+      publicSources: joinUniqueContactValues(primary.publicSources, duplicate.publicSources),
+      researchSummary: joinUniqueContactValues(primary.researchSummary, duplicate.researchSummary),
+      probableNeeds: joinUniqueContactValues(primary.probableNeeds, duplicate.probableNeeds),
+      recommendedQuestions: joinUniqueContactValues(primary.recommendedQuestions, duplicate.recommendedQuestions),
+      recommendedPath: joinUniqueContactValues(primary.recommendedPath, duplicate.recommendedPath),
+      netFreeCandidateReason: joinUniqueContactValues(primary.netFreeCandidateReason, duplicate.netFreeCandidateReason),
+      netFreePreferredPhone: joinUniqueContactValues(primary.netFreePreferredPhone, duplicate.netFreePreferredPhone),
+      netFreeBriefForClaudio: joinUniqueContactValues(primary.netFreeBriefForClaudio, duplicate.netFreeBriefForClaudio),
+      netFreeLeadProfile: joinUniqueContactValues(primary.netFreeLeadProfile, duplicate.netFreeLeadProfile),
+      netFreeMergedRecordCount: count,
+      netFreeMergedDuplicateIds: joinUniqueContactValues(primary.netFreeMergedDuplicateIds, duplicate.netFreeMergedDuplicateIds, duplicate.id),
+      netFreeMergedSources: joinUniqueContactValues(primary.netFreeMergedSources, duplicate.netFreeMergedSources, 'Unione automatica per identificatore forte'),
+      updatedAt: nowIso(),
+    } as Contact)
+  }
+
+  function mergeImportedNetFreeContacts(importedContacts: Contact[]) {
+    const merged: Contact[] = []
+    const indexByKey = new Map<string, number>()
+    let collapsed = 0
+    importedContacts.forEach((contact) => {
+      const key = netFreeDedupeKey(contact)
+      const previousIndex = indexByKey.get(key)
+      if (previousIndex === undefined) {
+        indexByKey.set(key, merged.length)
+        merged.push(contact)
+      } else {
+        merged[previousIndex] = mergeNetFreeContacts(merged[previousIndex], contact)
+        collapsed += 1
+      }
+    })
+    return { contacts: merged, collapsed }
   }
 
   function netFreeContactFromRecord(record: Record<string, any>, index: number, timestamp: string): Contact {
@@ -2381,7 +2499,7 @@ Esito da registrare: Approvato, Bocciato o Da valutare. Se approvato, la fase PE
       }
       return ''
     }
-    const name = get('name', 'nome', 'leadName', 'contactName') || `Lead NetFree ${index + 1}`
+    const name = cleanNetFreeName(get('name', 'nome', 'leadName', 'contactName')) || `Lead NetFree ${index + 1}`
     const phone = get('phone', 'telefono', 'mobile', 'cellulare', 'claudioPreferredPhone')
     const email = get('email', 'mail', 'generalEmail')
     const preferredChannel = get('preferredContactChannel', 'canalePreferito', 'channel')
@@ -2443,6 +2561,9 @@ Esito da registrare: Approvato, Bocciato o Da valutare. Se approvato, la fase PE
       netFreePreferredTimeWindow: preferredTimeWindow,
       netFreeCallTone: get('claudioCallTone'),
       netFreeBriefForClaudio: get('claudioLeadBrief', 'netFreeBriefForClaudio'),
+      netFreeMergedRecordCount: num(get('netFreeMergedRecordCount')) || 1,
+      netFreeMergedDuplicateIds: get('netFreeMergedDuplicateIds'),
+      netFreeMergedSources: get('netFreeMergedSources'),
     } as Contact)
   }
 
@@ -2474,22 +2595,36 @@ Esito da registrare: Approvato, Bocciato o Da valutare. Se approvato, la fase PE
       const normalizedHeaders = headers.map((header) => header.trim()).map((header, index) => header || `__empty_${index}`)
       records = dataRows.map((row) => Object.fromEntries(normalizedHeaders.map((header, index) => [header, row[index]?.trim() || '']).filter(([header]) => !String(header).startsWith('__empty_'))))
     }
-    const importedContacts = records
+    const rawImportedContacts = records
       .filter((record) => record && typeof record === 'object' && !Array.isArray(record))
       .map((record, index) => netFreeContactFromRecord(record, index, timestamp))
       .filter((contact) => String(contact.name || '').trim())
+    const { contacts: importedContacts, collapsed } = mergeImportedNetFreeContacts(rawImportedContacts)
     if (importedContacts.length === 0) throw new Error('nessun lead riconosciuto')
-    const existing = new Set(contacts.map(netFreeDedupeKey))
-    const fresh = importedContacts.filter((contact) => {
+    const existing = new Map(contacts.map((contact) => [netFreeDedupeKey(contact), contact]))
+    const fresh: Contact[] = []
+    let mergedIntoExisting = 0
+    const updatedExisting = contacts.map((contact) => contact)
+    const positionById = new Map(updatedExisting.map((contact, index) => [contact.id, index]))
+    importedContacts.forEach((contact) => {
       const key = netFreeDedupeKey(contact)
-      if (existing.has(key)) return false
-      existing.add(key)
-      return true
+      const previous = existing.get(key)
+      if (!previous) {
+        existing.set(key, contact)
+        fresh.push(contact)
+        return
+      }
+      const previousIndex = positionById.get(previous.id)
+      if (previousIndex !== undefined) {
+        updatedExisting[previousIndex] = mergeNetFreeContacts(previous, contact)
+        existing.set(key, updatedExisting[previousIndex])
+        mergedIntoExisting += 1
+      }
     })
-    const skipped = importedContacts.length - fresh.length
+    const skipped = rawImportedContacts.length - fresh.length
     if (fresh.length > 0) {
       const netFreeTaskLimit = 25
-      const nextContacts = [...fresh, ...contacts].map(normalizeContact)
+      const nextContacts = [...fresh, ...updatedExisting].map(normalizeContact)
       if (fresh.length > MASSIVE_NETFREE_IMPORT_THRESHOLD) {
         netFreeImportGuardUntilRef.current = Date.now() + NETFREE_IMPORT_GUARD_MS
         setCloudReady(false)
@@ -2508,8 +2643,8 @@ Esito da registrare: Approvato, Bocciato o Da valutare. Se approvato, la fase PE
     }
     setSection('netfree')
     setAnswer(fresh.length > 0
-      ? `Import NetFree/LCR completato da ${sourceLabel}: ${fresh.length} nuovi lead aggiunti al flusso parallelo LCR/NetFree, ${skipped} duplicati saltati. I 100 lead VoiceDesk aziendali restano separati e non vengono sostituiti. Totale candidati NetFree dopo l’import: ${netFreeContacts.length + fresh.length}. Trovi la lista nella sezione NetFree, sotto “Lista contatti importati”. Ho selezionato il primo lead importato. Se Supabase è configurato, il CRM avvia il salvataggio cloud a blocchi; in caso contrario esporta subito un Backup.`
-      : `Import NetFree letto correttamente da ${sourceLabel}, ma non ho aggiunto nuovi lead: le ${importedContacts.length} righe risultano già presenti in questo profilo. Se vuoi ricaricare da zero, usa Reset oppure importa in un profilo nuovo.`)
+      ? `Import NetFree/LCR completato da ${sourceLabel}: ${fresh.length} nuovi lead aggiunti al flusso parallelo LCR/NetFree, ${collapsed} duplicati uniti dentro l’archivio, ${mergedIntoExisting} schede già presenti aggiornate, ${skipped} righe non inserite come nuove perché duplicate. I 100 lead VoiceDesk aziendali restano separati e non vengono sostituiti. Totale candidati NetFree dopo l’import: ${netFreeContacts.length + fresh.length}. Trovi la lista nella sezione NetFree, sotto “Lista contatti importati”. Ho selezionato il primo lead importato. Se Supabase è configurato, il CRM avvia il salvataggio cloud a blocchi; in caso contrario esporta subito un Backup.`
+      : `Import NetFree letto correttamente da ${sourceLabel}, ma non ho aggiunto nuovi lead: le ${rawImportedContacts.length} righe risultano già presenti o già unificate in questo profilo. Se vuoi ricaricare da zero, usa Reset oppure importa in un profilo nuovo.`)
   }
 
   async function loadBundledNetFreeArchive() {
@@ -2580,7 +2715,7 @@ Esito da registrare: Approvato, Bocciato o Da valutare. Se approvato, la fase PE
   const nav = [{ id: 'dashboard', label: 'Dashboard', icon: TrendingUp }, { id: 'contacts', label: 'VoiceDesk 100', icon: Users }, { id: 'calendar', label: 'Calendario', icon: CalendarDays }, { id: 'pipeline', label: 'Flusso', icon: ChevronRight }, { id: 'conversations', label: 'Comunicazioni', icon: Upload }, { id: 'research', label: 'Ricerca guidata', icon: Search }, { id: 'study', label: 'Studio su misura', icon: Calculator }, { id: 'netfree', label: 'NetFree', icon: Phone }, { id: 'lcr', label: 'LCR 6x6', icon: CheckSquare }, { id: 'team', label: 'Soci e rete', icon: UserPlus }, { id: 'investors', label: 'Investitori', icon: TrendingUp }, { id: 'documents', label: 'Contratti e LOI', icon: ClipboardList }, { id: 'materials', label: 'Materiali', icon: ClipboardList }, { id: 'mailing', label: 'Mailing CCN', icon: Mail }, { id: 'agent', label: 'Agente', icon: Bot }] as const
 
   return (
-    <div className="min-h-screen bg-[#f7f6f1] text-gray-900"><div className="flex min-h-screen"><aside className="hidden md:flex w-72 flex-col border-r border-stone-200 bg-white/90 p-5"><div className="flex items-center gap-3 mb-8"><div className="w-10 h-10 rounded-2xl bg-blue-100 text-blue-700 flex items-center justify-center font-bold">AI</div><div><div className="font-bold text-lg">RelazioneCRM</div><div className="text-xs text-gray-500">Database privato</div></div></div><nav className="space-y-2">{nav.map((item) => { const Icon = item.icon; return <button key={item.id} onClick={() => setSection(item.id)} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition ${section === item.id ? 'bg-blue-50 text-blue-700 font-semibold' : 'hover:bg-stone-100 text-gray-700'}`}><Icon className="w-4 h-4" /> {item.label}</button> })}</nav><div className="mt-auto rounded-2xl bg-green-50 border border-green-200 p-4 text-sm text-green-900"><strong className="block mb-1">Uso privato operativo</strong>Database cloud se autenticato; fallback locale con backup se il collegamento non è disponibile.</div></aside><main className="flex-1 p-3 pb-28 md:p-8 md:pb-8 max-w-7xl mx-auto w-full"><header className="flex flex-col lg:flex-row lg:items-center gap-4 justify-between mb-8"><div><h1 className="text-3xl font-bold tracking-tight">CRM privato · VoiceDesk 100 + LCR/NetFree 2914</h1><p className="text-gray-500 mt-1">Gestisci due lavorazioni parallele: VoiceDesk sui primi 100 lead aziendali per ottimizzare la gestione chiamate con AI, e LCR/NetFree sui 2914 contatti per adesione indipendente e reddito passivo dagli asset.</p><div className="mt-3 flex flex-col sm:flex-row gap-2"><div className={`inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-semibold ${cloudStatus === 'cloud' ? 'bg-green-50 border-green-200 text-green-800' : cloudStatus === 'salvataggio' ? 'bg-blue-50 border-blue-200 text-blue-800' : cloudStatus === 'locale' ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-red-50 border-red-200 text-red-800'}`}><Database className="w-4 h-4 shrink-0" /><span>{cloudMessage}</span></div><div className={`inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-semibold ${authEmail ? 'bg-slate-50 border-slate-200 text-slate-800' : 'bg-amber-50 border-amber-200 text-amber-800'}`}><ShieldCheck className="w-4 h-4 shrink-0" />{authEmail ? `Accesso: ${authEmail}` : 'Modalità locale attiva: login serve solo per cloud'}</div><select value={currentRole} onChange={(e) => setCurrentRole(e.target.value as UserRole)} className="rounded-2xl border px-3 py-2 text-xs font-semibold bg-white" aria-label="Ruolo operativo">{userRoles.map((role) => <option key={role} value={role}>{role}</option>)}</select></div></div><div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2"><select value={section} onChange={(e) => setSection(e.target.value as Section)} className="md:hidden col-span-2 sm:col-span-1 rounded-xl border bg-white px-3 py-3 text-sm font-semibold" aria-label="Sezione CRM">{nav.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select><button onClick={importMilanoBatch1} className="px-4 py-2 rounded-xl bg-blue-700 text-white hover:bg-blue-800 text-sm inline-flex items-center gap-2"><Database className="w-4 h-4" />Carica VoiceDesk 100</button><button onClick={exportData} className="px-4 py-2 rounded-xl border bg-white hover:bg-stone-50 text-sm inline-flex items-center gap-2"><Download className="w-4 h-4" />Backup</button><label className="px-4 py-2 rounded-xl border bg-white hover:bg-stone-50 text-sm inline-flex items-center gap-2 cursor-pointer"><Upload className="w-4 h-4" />Importa<input type="file" accept="application/json" onChange={importData} className="hidden" /></label><label className="px-4 py-2 rounded-xl border bg-teal-50 hover:bg-teal-100 text-teal-800 text-sm inline-flex items-center gap-2 cursor-pointer"><Database className="w-4 h-4" />Import NetFree dati<input type="file" accept=".csv,.json,text/csv,application/json" onChange={importNetFreeCsv} className="hidden" /></label><button onClick={loadBundledNetFreeArchive} disabled={netFreeArchiveLoading} className="px-4 py-2 rounded-xl border bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-sm inline-flex items-center gap-2 justify-center disabled:opacity-50"><Database className="w-4 h-4" />{netFreeArchiveLoading ? 'Carico NetFree...' : 'Carica archivio NetFree 2914'}</button><button onClick={clearAllData} className="px-4 py-2 rounded-xl border bg-white hover:bg-red-50 text-sm text-red-700 inline-flex items-center gap-2 justify-center"><Trash2 className="w-4 h-4" />Reset</button>{authEmail ? <button onClick={signOutFromDemo} className="col-span-2 sm:col-span-1 px-4 py-2 rounded-xl border bg-white hover:bg-stone-50 text-sm inline-flex items-center gap-2 justify-center"><LogOut className="w-4 h-4" />Esci</button> : <button onClick={goToLogin} className="col-span-2 sm:col-span-1 px-4 py-2 rounded-xl bg-gray-900 text-white hover:bg-black text-sm inline-flex items-center gap-2 justify-center"><LogIn className="w-4 h-4" />Accedi</button>}</div></header><section className="mb-8 rounded-3xl border bg-white p-5"><div className="flex flex-col xl:flex-row xl:items-end gap-4 justify-between"><div><div className="flex items-center gap-2 text-sm font-semibold text-blue-800"><ShieldCheck className="w-4 h-4" /> Profili separati per te e soci</div><p className="text-gray-600 mt-1">Profilo attivo: <strong>{activeProfile?.name || 'Profilo locale'}</strong>. Con database attivo i contatti vengono ricaricati dal cloud; in modalità locale usa Backup/Importa per non perdere dati.</p></div><div className="flex flex-col md:flex-row gap-2 md:items-center"><select value={activeProfileId} onChange={(e) => switchProfile(e.target.value)} className="rounded-2xl border px-4 py-3 bg-white min-w-48">{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select><div className="flex gap-2"><input value={newProfileName} onChange={(e) => setNewProfileName(e.target.value)} className="rounded-2xl border px-4 py-3 w-48" placeholder="Nome socio/profilo" /><button onClick={createProfile} className="rounded-2xl bg-blue-700 text-white px-4 py-3 font-semibold hover:bg-blue-800"><UserPlus className="w-4 h-4 inline mr-2" />Crea</button></div></div></div>{isAdmin && <div className="mt-5 rounded-3xl border border-blue-100 bg-blue-50 p-4"><div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4"><div><div className="text-sm font-bold text-blue-900">Permessi servizi/materiali per profilo attivo</div><p className="text-sm text-blue-900/80 mt-1">Decidi quali servizi e documenti un socio o collaboratore può aprire e condividere. L’amministratore vede sempre tutto; i profili non amministratori vedono solo i materiali autorizzati.</p></div><select value={activeProfile?.role || 'Collaboratore'} onChange={(e) => activeProfile && updateProfilePermissions(activeProfile.id, { role: e.target.value as UserRole, allowedMaterialIds: e.target.value === 'Amministratore' ? allMaterialIds : activeProfile.allowedMaterialIds })} className="rounded-2xl border px-4 py-3 bg-white min-w-48">{userRoles.map((role) => <option key={role} value={role}>{role}</option>)}</select></div><div className="mt-4 grid md:grid-cols-2 xl:grid-cols-3 gap-3">{networkMaterials.map((material) => { const checked = activeProfile?.role === 'Amministratore' || !!activeProfile?.allowedMaterialIds?.includes(material.id); return <label key={material.id} className={`rounded-2xl border p-3 bg-white flex items-start gap-3 ${checked ? 'border-blue-200' : 'border-stone-200 opacity-75'}`}><input type="checkbox" checked={checked} disabled={!activeProfile || activeProfile.role === 'Amministratore'} onChange={() => activeProfile && toggleProfileMaterial(activeProfile.id, material.id)} className="mt-1" /><span><span className="block text-sm font-bold">{material.area}</span><span className="block text-xs text-gray-600">{material.title}</span></span></label> })}</div><textarea value={activeProfile?.permissionNotes || ''} onChange={(e) => activeProfile && updateProfilePermissions(activeProfile.id, { permissionNotes: e.target.value })} className="mt-4 w-full rounded-2xl border p-3 text-sm bg-white" placeholder="Note interne sui permessi: es. può condividere solo VoiceDesk e PEF cliente; Blotix solo dopo autorizzazione admin..." /></div>}
+    <div className="min-h-screen bg-[#f7f6f1] text-gray-900"><div className="flex min-h-screen"><aside className="hidden md:flex w-72 flex-col border-r border-stone-200 bg-white/90 p-5"><div className="flex items-center gap-3 mb-8"><div className="w-10 h-10 rounded-2xl bg-blue-100 text-blue-700 flex items-center justify-center font-bold">AI</div><div><div className="font-bold text-lg">RelazioneCRM</div><div className="text-xs text-gray-500">Database privato</div></div></div><nav className="space-y-2">{nav.map((item) => { const Icon = item.icon; return <button key={item.id} onClick={() => setSection(item.id)} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition ${section === item.id ? 'bg-blue-50 text-blue-700 font-semibold' : 'hover:bg-stone-100 text-gray-700'}`}><Icon className="w-4 h-4" /> {item.label}</button> })}</nav><div className="mt-auto rounded-2xl bg-green-50 border border-green-200 p-4 text-sm text-green-900"><strong className="block mb-1">Uso privato operativo</strong>Database cloud se autenticato; fallback locale con backup se il collegamento non è disponibile.</div></aside><main className="flex-1 p-3 pb-28 md:p-8 md:pb-8 max-w-7xl mx-auto w-full"><header className="flex flex-col lg:flex-row lg:items-center gap-4 justify-between mb-8"><div><h1 className="text-3xl font-bold tracking-tight">CRM privato · VoiceDesk 100 + LCR/NetFree 2914</h1><p className="text-gray-500 mt-1">Gestisci due lavorazioni parallele: VoiceDesk sull’elenco operativo dei 100 alberghi/strutture da contattare per ottimizzare la gestione chiamate con AI, e LCR/NetFree sui 2914 contatti per adesione indipendente e reddito passivo dagli asset.</p><div className="mt-3 flex flex-col sm:flex-row gap-2"><div className={`inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-semibold ${cloudStatus === 'cloud' ? 'bg-green-50 border-green-200 text-green-800' : cloudStatus === 'salvataggio' ? 'bg-blue-50 border-blue-200 text-blue-800' : cloudStatus === 'locale' ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-red-50 border-red-200 text-red-800'}`}><Database className="w-4 h-4 shrink-0" /><span>{cloudMessage}</span></div><div className={`inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-semibold ${authEmail ? 'bg-slate-50 border-slate-200 text-slate-800' : 'bg-amber-50 border-amber-200 text-amber-800'}`}><ShieldCheck className="w-4 h-4 shrink-0" />{authEmail ? `Accesso: ${authEmail}` : 'Modalità locale attiva: login serve solo per cloud'}</div><select value={currentRole} onChange={(e) => setCurrentRole(e.target.value as UserRole)} className="rounded-2xl border px-3 py-2 text-xs font-semibold bg-white" aria-label="Ruolo operativo">{userRoles.map((role) => <option key={role} value={role}>{role}</option>)}</select></div></div><div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2"><select value={section} onChange={(e) => setSection(e.target.value as Section)} className="md:hidden col-span-2 sm:col-span-1 rounded-xl border bg-white px-3 py-3 text-sm font-semibold" aria-label="Sezione CRM">{nav.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select><button onClick={importMilanoBatch1} className="px-4 py-2 rounded-xl bg-blue-700 text-white hover:bg-blue-800 text-sm inline-flex items-center gap-2"><Database className="w-4 h-4" />Mostra/Carica alberghi VoiceDesk 100</button><button onClick={exportData} className="px-4 py-2 rounded-xl border bg-white hover:bg-stone-50 text-sm inline-flex items-center gap-2"><Download className="w-4 h-4" />Backup</button><label className="px-4 py-2 rounded-xl border bg-white hover:bg-stone-50 text-sm inline-flex items-center gap-2 cursor-pointer"><Upload className="w-4 h-4" />Importa<input type="file" accept="application/json" onChange={importData} className="hidden" /></label><label className="px-4 py-2 rounded-xl border bg-teal-50 hover:bg-teal-100 text-teal-800 text-sm inline-flex items-center gap-2 cursor-pointer"><Database className="w-4 h-4" />Import NetFree dati<input type="file" accept=".csv,.json,text/csv,application/json" onChange={importNetFreeCsv} className="hidden" /></label><button onClick={loadBundledNetFreeArchive} disabled={netFreeArchiveLoading} className="px-4 py-2 rounded-xl border bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-sm inline-flex items-center gap-2 justify-center disabled:opacity-50"><Database className="w-4 h-4" />{netFreeArchiveLoading ? 'Carico NetFree...' : 'Carica NetFree 2914 → persone unite'}</button><button onClick={clearAllData} className="px-4 py-2 rounded-xl border bg-white hover:bg-red-50 text-sm text-red-700 inline-flex items-center gap-2 justify-center"><Trash2 className="w-4 h-4" />Reset</button>{authEmail ? <button onClick={signOutFromDemo} className="col-span-2 sm:col-span-1 px-4 py-2 rounded-xl border bg-white hover:bg-stone-50 text-sm inline-flex items-center gap-2 justify-center"><LogOut className="w-4 h-4" />Esci</button> : <button onClick={goToLogin} className="col-span-2 sm:col-span-1 px-4 py-2 rounded-xl bg-gray-900 text-white hover:bg-black text-sm inline-flex items-center gap-2 justify-center"><LogIn className="w-4 h-4" />Accedi</button>}</div></header><section className="mb-8 rounded-3xl border bg-white p-5"><div className="flex flex-col xl:flex-row xl:items-end gap-4 justify-between"><div><div className="flex items-center gap-2 text-sm font-semibold text-blue-800"><ShieldCheck className="w-4 h-4" /> Profili separati per te e soci</div><p className="text-gray-600 mt-1">Profilo attivo: <strong>{activeProfile?.name || 'Profilo locale'}</strong>. Con database attivo i contatti vengono ricaricati dal cloud; in modalità locale usa Backup/Importa per non perdere dati.</p></div><div className="flex flex-col md:flex-row gap-2 md:items-center"><select value={activeProfileId} onChange={(e) => switchProfile(e.target.value)} className="rounded-2xl border px-4 py-3 bg-white min-w-48">{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select><div className="flex gap-2"><input value={newProfileName} onChange={(e) => setNewProfileName(e.target.value)} className="rounded-2xl border px-4 py-3 w-48" placeholder="Nome socio/profilo" /><button onClick={createProfile} className="rounded-2xl bg-blue-700 text-white px-4 py-3 font-semibold hover:bg-blue-800"><UserPlus className="w-4 h-4 inline mr-2" />Crea</button></div></div></div>{isAdmin && <div className="mt-5 rounded-3xl border border-blue-100 bg-blue-50 p-4"><div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4"><div><div className="text-sm font-bold text-blue-900">Permessi servizi/materiali per profilo attivo</div><p className="text-sm text-blue-900/80 mt-1">Decidi quali servizi e documenti un socio o collaboratore può aprire e condividere. L’amministratore vede sempre tutto; i profili non amministratori vedono solo i materiali autorizzati.</p></div><select value={activeProfile?.role || 'Collaboratore'} onChange={(e) => activeProfile && updateProfilePermissions(activeProfile.id, { role: e.target.value as UserRole, allowedMaterialIds: e.target.value === 'Amministratore' ? allMaterialIds : activeProfile.allowedMaterialIds })} className="rounded-2xl border px-4 py-3 bg-white min-w-48">{userRoles.map((role) => <option key={role} value={role}>{role}</option>)}</select></div><div className="mt-4 grid md:grid-cols-2 xl:grid-cols-3 gap-3">{networkMaterials.map((material) => { const checked = activeProfile?.role === 'Amministratore' || !!activeProfile?.allowedMaterialIds?.includes(material.id); return <label key={material.id} className={`rounded-2xl border p-3 bg-white flex items-start gap-3 ${checked ? 'border-blue-200' : 'border-stone-200 opacity-75'}`}><input type="checkbox" checked={checked} disabled={!activeProfile || activeProfile.role === 'Amministratore'} onChange={() => activeProfile && toggleProfileMaterial(activeProfile.id, material.id)} className="mt-1" /><span><span className="block text-sm font-bold">{material.area}</span><span className="block text-xs text-gray-600">{material.title}</span></span></label> })}</div><textarea value={activeProfile?.permissionNotes || ''} onChange={(e) => activeProfile && updateProfilePermissions(activeProfile.id, { permissionNotes: e.target.value })} className="mt-4 w-full rounded-2xl border p-3 text-sm bg-white" placeholder="Note interne sui permessi: es. può condividere solo VoiceDesk e PEF cliente; Blotix solo dopo autorizzazione admin..." /></div>}
 </section>
 
 <section className="mb-8 rounded-3xl border bg-white p-5">
